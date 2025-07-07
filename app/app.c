@@ -77,6 +77,10 @@
 #include "ui/status.h"
 #include "ui/ui.h"
 
+#if defined(ENABLE_UART)
+	#include "driver/uart.h"
+#endif
+
 #ifdef ENABLE_MESSENGER_NOTIFICATION
 bool gPlayMSGRing = false;
 uint8_t gPlayMSGRingCount = 0;
@@ -1335,8 +1339,14 @@ void APP_TimeSlice500ms(void)
 			{
 				if (gDTMF_RX_live[0] != 0)
 				{
+					char _buf[32];
+					uint32_t _buflen=0;
+					_buflen=sprintf(_buf,"\nDTMF[%d]<%s\r\n",strlen(gDTMF_RX_live),gDTMF_RX_live);
+
 					memset(gDTMF_RX_live, 0, sizeof(gDTMF_RX_live));
 					gUpdateDisplay   = true;
+
+					UART_Send(_buf,_buflen);
 				}
 			}
 		}
