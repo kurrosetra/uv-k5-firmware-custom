@@ -1341,7 +1341,7 @@ void APP_TimeSlice500ms(void)
 				{
 					char _buf[32];
 					uint32_t _buflen=0;
-					_buflen=sprintf(_buf,"\nDTMF[%d]<%s\r\n",strlen(gDTMF_RX_live),gDTMF_RX_live);
+					_buflen=sprintf(_buf,"\n[D%d]<%s\n",strlen(gDTMF_RX_live),gDTMF_RX_live);
 
 					memset(gDTMF_RX_live, 0, sizeof(gDTMF_RX_live));
 					gUpdateDisplay   = true;
