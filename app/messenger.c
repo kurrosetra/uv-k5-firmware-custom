@@ -618,6 +618,15 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 
 	//UART_printf("\nMSG : S%i, F%i, E%i | %i", rx_sync, rx_fifo_almost_full, rx_finished, interrupt_bits);
 
+//	/* trap dtmf tone here for real-time */
+//	const bool drx_s_lost			= (interrupt_bits & BK4819_REG_02_SQUELCH_LOST) ? true : false;
+//	const bool drx_s_found			= (interrupt_bits & BK4819_REG_02_SQUELCH_FOUND) ? true : false;
+//	UART_printf("\nDTMF : L%i,F%i | %X", drx_s_lost,drx_s_found, interrupt_bits);
+//	if((drx_s_lost==0)&&(drx_s_found==0)){
+//		uint16_t dtmf_tone   = BK4819_ReadRegister(BK4819_REG_0B);
+//		UART_printf("\nTONE:%d",(dtmf_tone>>8)&0x0F);
+//	}
+
 	if (rx_sync) {
 		gFSKWriteIndex = 0;
 		memset(msgFSKBuffer, 0, sizeof(msgFSKBuffer));
