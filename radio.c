@@ -38,6 +38,8 @@
 #include "radio.h"
 #include "settings.h"
 #include "ui/menu.h"
+/* TODO TEST */
+#include "driver/uart.h"
 
 VFO_Info_t    *gTxVfo;
 VFO_Info_t    *gRxVfo;
@@ -955,6 +957,8 @@ void RADIO_PrepareTX(void)
 	}
 
 	// TX is allowed
+	/* TODO TEST */
+	UART_printf("\n[radio.c:%d]",__LINE__);
 
 #ifdef ENABLE_DTMF_CALLING
 	if (gDTMF_ReplyState == DTMF_REPLY_ANI)

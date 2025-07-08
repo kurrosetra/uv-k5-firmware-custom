@@ -77,6 +77,10 @@
 #include "ui/status.h"
 #include "ui/ui.h"
 
+#if defined(ENABLE_UART)
+	#include "driver/uart.h"
+#endif
+
 #ifdef ENABLE_MESSENGER_NOTIFICATION
 bool gPlayMSGRing = false;
 uint8_t gPlayMSGRingCount = 0;
@@ -1032,7 +1036,8 @@ static void CheckKeys(void)
 	else if (!GPIO_CheckBit(&GPIOC->DATA, GPIOC_PIN_PTT) && !SerialConfigInProgress())
 	{	// PTT pressed
 		if (++gPttDebounceCounter >= 3)	    // 30ms
-		{	// start transmitting
+		{
+			// start transmitting
 			boot_counter_10ms   = 0;
 			gPttDebounceCounter = 0;
 			gPttIsPressed       = true;
@@ -1335,8 +1340,14 @@ void APP_TimeSlice500ms(void)
 			{
 				if (gDTMF_RX_live[0] != 0)
 				{
+					char _buf[32];
+					uint32_t _buflen=0;
+					_buflen=sprintf(_buf,"\n[D%d]<%s\n",strlen(gDTMF_RX_live),gDTMF_RX_live);
+
 					memset(gDTMF_RX_live, 0, sizeof(gDTMF_RX_live));
 					gUpdateDisplay   = true;
+
+					UART_Send(_buf,_buflen);
 				}
 			}
 		}
@@ -1739,6 +1750,9 @@ static void ProcessKey(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 			}
 			else {
 				Code = DTMF_GetCharacter(Key - KEY_0);
+				/* TODO TEST */
+				UART_printf("\n[app.c:%d]%c",__LINE__, Code);
+
 				if (Code == 0xFF)
 					goto Skip;
 				// transmit DTMF keys
@@ -1911,6 +1925,9 @@ Skip:
 	}
 
 	if (gFlagPrepareTX) {
+		/* TODO TEST */
+		UART_printf("\n[app.c:%d]",__LINE__);
+
 		RADIO_PrepareTX();
 		gFlagPrepareTX = false;
 	}

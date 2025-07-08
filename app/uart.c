@@ -528,13 +528,16 @@ bool findchar(uint8_t start, char letter) {
 	return false;
 }
 
-uint8_t txtStart = 0;
-bool newTxtMsg = false;
 
 #endif
 
 bool UART_IsCommandAvailable(void)
 {
+	static uint8_t txtStart = 0;
+	static bool newTxtMsg = false;
+	static bool newDtmfMsg = false;
+	bool validMsg = false;
+
 	uint16_t Index;
 	uint16_t TailIndex;
 	uint16_t Size;
@@ -555,26 +558,74 @@ bool UART_IsCommandAvailable(void)
 			//UART_printf("1:%s\r\n", &UART_DMA_Buffer[txtStart]);
 		}
 
-		if (findchar(txtStart, '\n') && newTxtMsg) {
-			//UART_printf("2:%s\r\n", &UART_DMA_Buffer[txtStart]);
-			char txMessage[TX_MSG_LENGTH + 4];
-			memset(txMessage, 0, sizeof(txMessage));
-			snprintf(txMessage, (TX_MSG_LENGTH + 4), "%s", &UART_DMA_Buffer[txtStart + 4]);
-
-			remove(txMessage, '\n');
-			remove(txMessage, '\r');      
-
-			if (strlen(txMessage) > 0) {        
-				MSG_Send(txMessage, false);
-				UART_printf("SMS>%s\r\n", txMessage);
-				gUpdateDisplay = true;
-			}
-			newTxtMsg = false;
-			txtStart = 0;
-			memset(UART_DMA_Buffer, 0, sizeof(UART_DMA_Buffer));
-			gUART_WriteIndex = 0;
-			return false;			
+		/* TODO DTMF Send handler here */
+		if ( UART_DMA_Buffer[gUART_WriteIndex] == 'D' && UART_DMA_Buffer[gUART_WriteIndex + 1] == 'T' && UART_DMA_Buffer[ gUART_WriteIndex + 2] == 'M' && UART_DMA_Buffer[gUART_WriteIndex + 3] == 'F' && UART_DMA_Buffer[gUART_WriteIndex + 4] == ':') {
+			txtStart = gUART_WriteIndex;
+			newDtmfMsg = true;
+			UART_printf("D:%s\r\n", &UART_DMA_Buffer[txtStart]);
 		}
+
+		if(findchar(txtStart, '\n')){
+			if(newTxtMsg){
+				char txMessage[TX_MSG_LENGTH + 4];
+				memset(txMessage, 0, sizeof(txMessage));
+				snprintf(txMessage, (TX_MSG_LENGTH + 4), "%s", &UART_DMA_Buffer[txtStart + 4]);
+
+				remove(txMessage, '\n');
+				remove(txMessage, '\r');
+
+				if (strlen(txMessage) > 0) {
+					MSG_Send(txMessage, false);
+					UART_printf("SMS>%s\r\n", txMessage);
+					gUpdateDisplay = true;
+				}
+				validMsg = true;
+			}
+			else if(newDtmfMsg){
+				char dtMessage[TX_MSG_LENGTH + 5];
+				memset(dtMessage, 0, sizeof(dtMessage));
+				snprintf(dtMessage, (TX_MSG_LENGTH + 5), "%s", &UART_DMA_Buffer[txtStart + 5]);
+
+				remove(dtMessage, '\n');
+				remove(dtMessage, '\r');
+
+				if (strlen(dtMessage) > 0) {
+					DTMF_Send(dtMessage, false);
+					UART_printf("DTMF>%s\r\n", dtMessage);
+					gUpdateDisplay = true;
+				}
+				validMsg = true;
+			}
+
+			if(validMsg){
+				newTxtMsg = newDtmfMsg = false;
+				txtStart = 0;
+				memset(UART_DMA_Buffer, 0, sizeof(UART_DMA_Buffer));
+				gUART_WriteIndex = 0;
+			}
+			return false;
+		}
+
+//		if (findchar(txtStart, '\n') && newTxtMsg) {
+//			//UART_printf("2:%s\r\n", &UART_DMA_Buffer[txtStart]);
+//			char txMessage[TX_MSG_LENGTH + 4];
+//			memset(txMessage, 0, sizeof(txMessage));
+//			snprintf(txMessage, (TX_MSG_LENGTH + 4), "%s", &UART_DMA_Buffer[txtStart + 4]);
+//
+//			remove(txMessage, '\n');
+//			remove(txMessage, '\r');
+//
+//			if (strlen(txMessage) > 0) {
+//				MSG_Send(txMessage, false);
+//				UART_printf("SMS>%s\r\n", txMessage);
+//				gUpdateDisplay = true;
+//			}
+//			newTxtMsg = false;
+//			txtStart = 0;
+//			memset(UART_DMA_Buffer, 0, sizeof(UART_DMA_Buffer));
+//			gUART_WriteIndex = 0;
+//			return false;
+//		}
 		
 		while (gUART_WriteIndex != DmaLength && UART_DMA_Buffer[gUART_WriteIndex] != 0xABU && UART_DMA_Buffer[gUART_WriteIndex] != 'S')
 			gUART_WriteIndex = DMA_INDEX(gUART_WriteIndex, 1);

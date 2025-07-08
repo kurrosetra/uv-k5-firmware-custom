@@ -38,6 +38,9 @@
 #include "ui/inputbox.h"
 #include "ui/ui.h"
 
+/* TODO TEST */
+#include "driver/uart.h"
+
 void GENERIC_Key_F(bool bKeyPressed, bool bKeyHeld)
 {
 	if (gInputBoxIndex > 0) {
@@ -105,7 +108,7 @@ void GENERIC_Key_PTT(bool bKeyPressed)
 	if (!bKeyPressed || SerialConfigInProgress())
 	{	// PTT released
 		if (gCurrentFunction == FUNCTION_TRANSMIT) {	
-			// we are transmitting .. stop
+			// we are transmitting .. stop,
 			if (gFlagEndTransmission) {
 				FUNCTION_Select(FUNCTION_FOREGROUND);
 			}
@@ -182,6 +185,9 @@ void GENERIC_Key_PTT(bool bKeyPressed)
 	// was entering a DTMF string
 
 	if (gDTMF_InputBox_Index > 0 || gDTMF_PreviousIndex > 0) { // going to transmit a DTMF string
+		/* TODO TEST */
+		UART_printf("\n[generic.c:%d]",__LINE__);
+
 		if (gDTMF_InputBox_Index == 0 && gDTMF_PreviousIndex > 0)
 			gDTMF_InputBox_Index = gDTMF_PreviousIndex;           // use the previous DTMF string
 
@@ -207,16 +213,25 @@ void GENERIC_Key_PTT(bool bKeyPressed)
 	DTMF_clear_input_box();
 
 start_tx:
+	/* TODO TEST */
+	UART_printf("\n[generic.c:%d]",__LINE__);
+
 	// request start TX
 	gFlagPrepareTX = true;
 	goto done;
 
 cancel_tx:
+	/* TODO TEST */
+	UART_printf("\n[generic.c:%d]",__LINE__);
+
 	if (gPttIsPressed) {
 		gPttWasPressed = true;
 	}
 
 done:
+	/* TODO TEST */
+	UART_printf("\n[generic.c:%d]",__LINE__);
+
 	gPttDebounceCounter = 0;
 	#ifdef ENABLE_FMRADIO
 		if (gScreenToDisplay != DISPLAY_MENU && gRequestDisplayScreen != DISPLAY_FM)     // 1of11 .. don't close the menu

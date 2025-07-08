@@ -41,8 +41,9 @@ void UART_Init(void)
 	}
 
 	// 48M, the baud rate is set to 115200, then UARTDIV=48000000/115200=416.6, 417 can be selected based on rounding.
-	UART1->BAUD = Frequency / 39053U;
-	//UART1->BAUD = 48000000U / 38400U;
+//	UART1->BAUD = Frequency / 39053U;
+//	UART1->BAUD = 48000000U / 38400U;
+	UART1->BAUD = 1250U;
 	
 	//UART1->BAUD = Frequency / 115200;
 	//UART1->BAUD = 48000000U / 128000;
@@ -97,9 +98,9 @@ void UART_Send(const void *pBuffer, uint32_t Size)
 	uint32_t i;
 
 	for (i = 0; i < Size; i++) {
-		UART1->TDR = pData[i];
-		while ((UART1->IF & UART_IF_TXFIFO_FULL_MASK) != UART_IF_TXFIFO_FULL_BITS_NOT_SET) {
+		while ((UART1->IF & UART_IF_TXFIFO_EMPTY_MASK) != UART_IF_TXFIFO_EMPTY_BITS_SET) {
 		}
+		UART1->TDR = pData[i];
 	}
 }
 

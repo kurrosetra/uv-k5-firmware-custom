@@ -535,6 +535,73 @@ void moveUP(char (*rxMessages)[MAX_RX_MSG_LENGTH + 2]) {
 	memset(rxMessages[3], 0, sizeof(rxMessages[3]));
 }
 
+
+void DTMF_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
+	if ( msgStatus != READY ) return;
+
+	if ( strlen(txMessage) > 0 && (TX_freq_check(gCurrentVfo->pTX->Frequency) == 0) ) {
+
+		msgStatus = SENDING;
+		UART_Send("\ndt",3);
+
+		RADIO_SetVfoState(VFO_STATE_NORMAL);
+		BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, true);
+
+		memset(msgFSKBuffer, 0, sizeof(msgFSKBuffer));
+
+		// ? ToDo
+		// first 20 byte sync, msg type and ID
+		msgFSKBuffer[0] = 'M';
+		msgFSKBuffer[1] = 'S';
+
+		// next 20 for msg
+		memcpy(msgFSKBuffer + 2, txMessage, TX_MSG_LENGTH);
+
+		// CRC ? ToDo
+
+		msgFSKBuffer[MAX_RX_MSG_LENGTH - 1] = '\0';
+		msgFSKBuffer[MAX_RX_MSG_LENGTH + 0] = 'I';
+		msgFSKBuffer[MAX_RX_MSG_LENGTH + 1] = 'D';
+		msgFSKBuffer[MAX_RX_MSG_LENGTH + 2] = '0';
+		msgFSKBuffer[(MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH) - 1] = '#';
+
+		BK4819_DisableDTMF();
+
+		//RADIO_SetTxParameters();
+		FUNCTION_Select(FUNCTION_TRANSMIT);
+		//SYSTEM_DelayMs(500);
+		//BK4819_PlayRogerNormal(98);
+		SYSTEM_DelayMs(100);
+
+		//BK4819_ExitTxMute();
+
+		MSG_FSKSendData();
+
+		SYSTEM_DelayMs(100);
+
+		APP_EndTransmission(true);
+		RADIO_SetVfoState(VFO_STATE_NORMAL);
+
+		BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, false);
+
+		MSG_EnableRX(true);
+		if (!bServiceMessage) {
+			moveUP(rxMessage);
+			sprintf(rxMessage[3], "> %s", txMessage);
+			memset(lastcMessage, 0, sizeof(lastcMessage));
+			memcpy(lastcMessage, txMessage, TX_MSG_LENGTH);
+			cIndex = 0;
+			prevKey = 0;
+			prevLetter = 0;
+			memset(cMessage, 0, sizeof(cMessage));
+		}
+		msgStatus = READY;
+
+	} else {
+		AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL);
+	}
+}
+
 void MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 
 	if ( msgStatus != READY ) return;
@@ -542,6 +609,7 @@ void MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 	if ( strlen(txMessage) > 0 && (TX_freq_check(gCurrentVfo->pTX->Frequency) == 0) ) {
 
 		msgStatus = SENDING;
+		UART_Send("\nTx",3);
 
 		RADIO_SetVfoState(VFO_STATE_NORMAL);
 		BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, true);
@@ -617,6 +685,15 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 	const bool rx_finished         = (interrupt_bits & BK4819_REG_02_FSK_RX_FINISHED) ? true : false;
 
 	//UART_printf("\nMSG : S%i, F%i, E%i | %i", rx_sync, rx_fifo_almost_full, rx_finished, interrupt_bits);
+
+//	/* trap dtmf tone here for real-time */
+//	const bool drx_s_lost			= (interrupt_bits & BK4819_REG_02_SQUELCH_LOST) ? true : false;
+//	const bool drx_s_found			= (interrupt_bits & BK4819_REG_02_SQUELCH_FOUND) ? true : false;
+//	UART_printf("\nDTMF : L%i,F%i | %X", drx_s_lost,drx_s_found, interrupt_bits);
+//	if((drx_s_lost==0)&&(drx_s_found==0)){
+//		uint16_t dtmf_tone   = BK4819_ReadRegister(BK4819_REG_0B);
+//		UART_printf("\nTONE:%d",(dtmf_tone>>8)&0x0F);
+//	}
 
 	if (rx_sync) {
 		gFSKWriteIndex = 0;

@@ -42,6 +42,9 @@
 #include "settings.h"
 #include "ui/status.h"
 #include "ui/ui.h"
+/* TODO TEST */
+#include "driver/uart.h"
+
 
 FUNCTION_Type_t gCurrentFunction;
 
@@ -141,6 +144,8 @@ void FUNCTION_PowerSave() {
 
 void FUNCTION_Transmit()
 {
+	/* TODO TEST */
+	UART_printf("\n[fx.c:%d]",__LINE__);
 
 #ifdef ENABLE_MESSENGER
 	MSG_EnableRX(false);	
@@ -229,6 +234,9 @@ void FUNCTION_Transmit()
 	if (gSetting_backlight_on_tx_rx & BACKLIGHT_ON_TR_TX) {
 		BACKLIGHT_TurnOn();
 	}
+	SYSTEM_DelayMs(100);
+	/* TODO TEST */
+	UART_printf("\n[fx.c:%d]",__LINE__);
 }
 
 

@@ -67,8 +67,8 @@ ENABLE_SCREEN_DUMP			  ?= 0
 
 #------------------------------------------------------------------------------
 AUTHOR_STRING ?= JOAQUIM
-VERSION_STRING ?= V0.3.6
-PROJECT_NAME := cfw_joaquimorg_oefw_V0.3.6
+VERSION_STRING ?= V0.3.6B
+PROJECT_NAME := cfw_kurro_oefw_V0.3.6B
 
 BUILD := _build
 BIN := firmware
