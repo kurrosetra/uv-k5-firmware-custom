@@ -36,6 +36,8 @@ void MSG_Init();
 void MSG_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld);
 void MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage);
 
+void DTMF_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage);
+
 #endif
 
 #endif

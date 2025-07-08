@@ -1036,7 +1036,8 @@ static void CheckKeys(void)
 	else if (!GPIO_CheckBit(&GPIOC->DATA, GPIOC_PIN_PTT) && !SerialConfigInProgress())
 	{	// PTT pressed
 		if (++gPttDebounceCounter >= 3)	    // 30ms
-		{	// start transmitting
+		{
+			// start transmitting
 			boot_counter_10ms   = 0;
 			gPttDebounceCounter = 0;
 			gPttIsPressed       = true;
@@ -1749,6 +1750,9 @@ static void ProcessKey(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 			}
 			else {
 				Code = DTMF_GetCharacter(Key - KEY_0);
+				/* TODO TEST */
+				UART_printf("\n[app.c:%d]%c",__LINE__, Code);
+
 				if (Code == 0xFF)
 					goto Skip;
 				// transmit DTMF keys
@@ -1921,6 +1925,9 @@ Skip:
 	}
 
 	if (gFlagPrepareTX) {
+		/* TODO TEST */
+		UART_printf("\n[app.c:%d]",__LINE__);
+
 		RADIO_PrepareTX();
 		gFlagPrepareTX = false;
 	}
