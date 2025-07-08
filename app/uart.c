@@ -591,7 +591,7 @@ bool UART_IsCommandAvailable(void)
 
 				if (strlen(dtMessage) > 0) {
 					DTMF_Send(dtMessage, false);
-					UART_printf("DTMF>%s\r\n", dtMessage);
+					UART_printf("\nDTMF>%s\n", dtMessage);
 					gUpdateDisplay = true;
 				}
 				validMsg = true;

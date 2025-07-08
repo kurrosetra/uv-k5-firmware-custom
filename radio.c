@@ -958,7 +958,8 @@ void RADIO_PrepareTX(void)
 
 	// TX is allowed
 	/* TODO TEST */
-	UART_printf("\n[radio.c:%d]",__LINE__);
+	if(strlen(gDTMF_String)>0)
+		UART_printf("\n[radio.c:%d]%s",__LINE__,gDTMF_String);
 
 #ifdef ENABLE_DTMF_CALLING
 	if (gDTMF_ReplyState == DTMF_REPLY_ANI)

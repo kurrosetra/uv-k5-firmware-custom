@@ -8,3 +8,4 @@ k5_eeprom.raw
 k5prog.exe.stackdump
 .settings/
 .*project
+.autotools

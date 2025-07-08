@@ -16,6 +16,8 @@
 #include "app/messenger.h"
 #include "common.h"
 #include "ui/ui.h"
+/* TODO TEST */
+#include "dtmf.h"
 
 #if defined(ENABLE_UART)
 	#include "driver/uart.h"
@@ -537,66 +539,28 @@ void moveUP(char (*rxMessages)[MAX_RX_MSG_LENGTH + 2]) {
 
 
 void DTMF_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
+	(void)bServiceMessage;
 	if ( msgStatus != READY ) return;
 
 	if ( strlen(txMessage) > 0 && (TX_freq_check(gCurrentVfo->pTX->Frequency) == 0) ) {
+		/* TODO if txMessage contain invalid character */
 
 		msgStatus = SENDING;
-		UART_Send("\ndt",3);
-
+		memcpy(gDTMF_String,txMessage,15);
 		RADIO_SetVfoState(VFO_STATE_NORMAL);
 		BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, true);
-
-		memset(msgFSKBuffer, 0, sizeof(msgFSKBuffer));
-
-		// ? ToDo
-		// first 20 byte sync, msg type and ID
-		msgFSKBuffer[0] = 'M';
-		msgFSKBuffer[1] = 'S';
-
-		// next 20 for msg
-		memcpy(msgFSKBuffer + 2, txMessage, TX_MSG_LENGTH);
-
-		// CRC ? ToDo
-
-		msgFSKBuffer[MAX_RX_MSG_LENGTH - 1] = '\0';
-		msgFSKBuffer[MAX_RX_MSG_LENGTH + 0] = 'I';
-		msgFSKBuffer[MAX_RX_MSG_LENGTH + 1] = 'D';
-		msgFSKBuffer[MAX_RX_MSG_LENGTH + 2] = '0';
-		msgFSKBuffer[(MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH) - 1] = '#';
-
-		BK4819_DisableDTMF();
-
-		//RADIO_SetTxParameters();
 		FUNCTION_Select(FUNCTION_TRANSMIT);
-		//SYSTEM_DelayMs(500);
-		//BK4819_PlayRogerNormal(98);
-		SYSTEM_DelayMs(100);
+		SYSTEM_DelayMs(500);
 
-		//BK4819_ExitTxMute();
-
-		MSG_FSKSendData();
+		gDTMF_ReplyState=DTMF_REPLY_ANI;
+		DTMF_Reply();
 
 		SYSTEM_DelayMs(100);
-
 		APP_EndTransmission(true);
 		RADIO_SetVfoState(VFO_STATE_NORMAL);
-
 		BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, false);
 
-		MSG_EnableRX(true);
-		if (!bServiceMessage) {
-			moveUP(rxMessage);
-			sprintf(rxMessage[3], "> %s", txMessage);
-			memset(lastcMessage, 0, sizeof(lastcMessage));
-			memcpy(lastcMessage, txMessage, TX_MSG_LENGTH);
-			cIndex = 0;
-			prevKey = 0;
-			prevLetter = 0;
-			memset(cMessage, 0, sizeof(cMessage));
-		}
 		msgStatus = READY;
-
 	} else {
 		AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL);
 	}
