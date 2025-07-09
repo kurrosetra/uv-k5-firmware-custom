@@ -144,9 +144,6 @@ void FUNCTION_PowerSave() {
 
 void FUNCTION_Transmit()
 {
-	/* TODO TEST */
-	UART_printf("\n[fx.c:%d]",__LINE__);
-
 #ifdef ENABLE_MESSENGER
 	MSG_EnableRX(false);	
 #endif	
@@ -194,6 +191,9 @@ void FUNCTION_Transmit()
 
 	GUI_DisplayScreen();
 
+//	/* TODO TEST */
+//	UART_printf("\n[fx.c:%d]",__LINE__);
+
 	RADIO_SetTxParameters();
 
 	// turn the RED LED on
@@ -234,9 +234,6 @@ void FUNCTION_Transmit()
 	if (gSetting_backlight_on_tx_rx & BACKLIGHT_ON_TR_TX) {
 		BACKLIGHT_TurnOn();
 	}
-	SYSTEM_DelayMs(100);
-	/* TODO TEST */
-	UART_printf("\n[fx.c:%d]",__LINE__);
 }
 
 

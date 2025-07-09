@@ -1750,9 +1750,6 @@ static void ProcessKey(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 			}
 			else {
 				Code = DTMF_GetCharacter(Key - KEY_0);
-				/* TODO TEST */
-				UART_printf("\n[app.c:%d]%c",__LINE__, Code);
-
 				if (Code == 0xFF)
 					goto Skip;
 				// transmit DTMF keys
@@ -1925,9 +1922,6 @@ Skip:
 	}
 
 	if (gFlagPrepareTX) {
-		/* TODO TEST */
-		UART_printf("\n[app.c:%d]",__LINE__);
-
 		RADIO_PrepareTX();
 		gFlagPrepareTX = false;
 	}
