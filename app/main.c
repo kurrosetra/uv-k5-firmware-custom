@@ -46,8 +46,6 @@
 #include "ui/inputbox.h"
 #include "ui/ui.h"
 #include <stdlib.h>
-/* TODO TEST */
-#include "driver/uart.h"
 
 void toggle_chan_scanlist(void)
 {	// toggle the selected channels scanlist setting
@@ -580,8 +578,6 @@ static void MAIN_Key_STAR(bool bKeyPressed, bool bKeyHeld)
 #endif		
 		)
 		{	// start entering a DTMF string
-			/* TODO TEST */
-			UART_printf("\n[main.c:%d]",__LINE__);
 			gBeepToPlay = BEEP_1KHZ_60MS_OPTIONAL;
 			memcpy(gDTMF_InputBox, gDTMF_String, MIN(sizeof(gDTMF_InputBox), sizeof(gDTMF_String) - 1));
 			gDTMF_InputBox_Index  = 0;
@@ -712,9 +708,6 @@ void MAIN_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 		const char Character = DTMF_GetCharacter(Key);
 		if (Character != 0xFF)
 		{	// add key to DTMF string
-			/* TODO TEST */
-			UART_printf("\n[main.c:%d]%c",__LINE__,Character);
-
 			DTMF_Append(Character);
 			gKeyInputCountdown    = key_input_timeout_500ms;
 			gRequestDisplayScreen = DISPLAY_MAIN;
@@ -753,9 +746,6 @@ void MAIN_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 			GENERIC_Key_F(bKeyPressed, bKeyHeld);
 			break;
 		case KEY_PTT:
-			/* TODO TEST */
-			UART_printf("\n[main.c:%d]P%d",__LINE__, bKeyPressed);
-
 			GENERIC_Key_PTT(bKeyPressed);
 			break;
 		default:

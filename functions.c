@@ -191,8 +191,8 @@ void FUNCTION_Transmit()
 
 	GUI_DisplayScreen();
 
-	/* TODO TEST */
-	UART_printf("\n[fx.c:%d]",__LINE__);
+//	/* TODO TEST */
+//	UART_printf("\n[fx.c:%d]",__LINE__);
 
 	RADIO_SetTxParameters();
 
