@@ -547,8 +547,12 @@ void DTMF_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 
 		msgStatus = SENDING;
 		memcpy(gDTMF_String,txMessage,15);
+
 		RADIO_SetVfoState(VFO_STATE_NORMAL);
 		BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, true);
+
+		// mute the mic during TX
+		gMuteMic = true;
 		FUNCTION_Select(FUNCTION_TRANSMIT);
 		SYSTEM_DelayMs(500);
 
@@ -557,6 +561,8 @@ void DTMF_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 
 		SYSTEM_DelayMs(100);
 		APP_EndTransmission(true);
+		// this must be run after end of TX, otherwise radio will still TX transmit without even RED LED on
+		FUNCTION_Select(FUNCTION_FOREGROUND);
 		RADIO_SetVfoState(VFO_STATE_NORMAL);
 		BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, false);
 
@@ -596,6 +602,8 @@ void MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 		msgFSKBuffer[(MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH) - 1] = '#';
 
 		BK4819_DisableDTMF();
+		// mute the mic during TX
+		gMuteMic = true;
 
 		//RADIO_SetTxParameters();
 		FUNCTION_Select(FUNCTION_TRANSMIT);
@@ -607,10 +615,15 @@ void MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 		
 		MSG_FSKSendData();
 
-		SYSTEM_DelayMs(100);
+		SYSTEM_DelayMs(50);
 
 		APP_EndTransmission(true);
+		// this must be run after end of TX, otherwise radio will still TX transmit without even RED LED on
+		FUNCTION_Select(FUNCTION_FOREGROUND);
 		RADIO_SetVfoState(VFO_STATE_NORMAL);
+
+		// disable mic mute after TX
+		gMuteMic = false;
 
 		BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, false);
 

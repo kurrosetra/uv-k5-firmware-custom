@@ -44,6 +44,7 @@ VFO_Info_t    *gRxVfo;
 VFO_Info_t    *gCurrentVfo;
 DCS_CodeType_t gCurrentCodeType;
 VfoState_t     VfoState[2];
+bool		   gMuteMic;
 
 const char gModulationStr[MODULATION_UKNOWN][4] = {
 	[MODULATION_FM]="FM",
@@ -784,7 +785,7 @@ void RADIO_SetTxParameters(void)
 	// TX compressor
 	BK4819_SetCompander((gRxVfo->Modulation == MODULATION_FM && (gRxVfo->Compander == 1 || gRxVfo->Compander >= 3)) ? gRxVfo->Compander : 0);
 
-	BK4819_PrepareTransmit();
+	BK4819_PrepareTransmit(gMuteMic);
 
 	SYSTEM_DelayMs(10);
 
