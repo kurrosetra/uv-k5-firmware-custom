@@ -47,6 +47,9 @@
 #include "ui/ui.h"
 #include <stdlib.h>
 
+/* TODO TEST */
+#include "driver/uart.h"
+
 void toggle_chan_scanlist(void)
 {	// toggle the selected channels scanlist setting
 
@@ -294,8 +297,12 @@ static void MAIN_Key_DIGITS(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 		gKeyInputCountdown = key_input_timeout_500ms;
 		INPUTBOX_Append(Key);
 		gRequestDisplayScreen = DISPLAY_MAIN;
+//		/* TODO TEST */
+//		UART_printf("\n[main.c:%d]%x,%d",__LINE__,Key,gInputBoxIndex);
 
 		if (IS_MR_CHANNEL(gTxVfo->CHANNEL_SAVE)) { // user is entering channel number
+			/* TODO TEST */
+			UART_printf("\n[main.c:%d]%x,%d",__LINE__,Key,gInputBoxIndex);
 
 			if (gInputBoxIndex != 3) {
 				#ifdef ENABLE_VOICE
@@ -331,6 +338,8 @@ static void MAIN_Key_DIGITS(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 //		#endif
 		if (IS_FREQ_CHANNEL(gTxVfo->CHANNEL_SAVE))
 		{	// user is entering a frequency
+			/* TODO TEST */
+			UART_printf("\n[main.c:%d]%x,%d",__LINE__,Key,gInputBoxIndex);
 
 #ifdef ENABLE_VOICE
 			gAnotherVoiceID = (VOICE_ID_t)Key;
@@ -342,6 +351,8 @@ static void MAIN_Key_DIGITS(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 
 			gInputBoxIndex = 0;
 			uint32_t Frequency = StrToUL(INPUTBOX_GetAscii()) * 100;
+			/* TODO TEST */
+			UART_printf("\n[main.c:%d]f_input=%d", __LINE__, Frequency);
 
 			// clamp the frequency entered to some valid value
 			if (Frequency < frequencyBandTable[0].lower) {
@@ -356,6 +367,9 @@ static void MAIN_Key_DIGITS(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 			}
 
 			const FREQUENCY_Band_t band = FREQUENCY_GetBand(Frequency);
+			/* TODO TEST */
+			UART_printf("\n[main.c:%d]f_clamp=%d,%d,%d", __LINE__, Frequency,
+					band, gTxVfo->Band);
 
 			if (gTxVfo->Band != band) {
 				gTxVfo->Band               = band;
@@ -376,6 +390,9 @@ static void MAIN_Key_DIGITS(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 			}
 
 			gTxVfo->freq_config_RX.Frequency = Frequency;
+			/* TODO TEST */
+			UART_printf("\n[main.c:%d]f_round=%d,%d", __LINE__, Frequency,
+					gTxVfo->freq_config_RX.Frequency);
 
 			gRequestSaveChannel = 1;
 			return;
@@ -705,6 +722,8 @@ void MAIN_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 #endif
 
 	if (gDTMF_InputMode && bKeyPressed && !bKeyHeld) {
+		/* TODO TEST */
+		UART_printf("\n[main.c:%d]%c%d%d",__LINE__,Key,bKeyPressed,bKeyHeld);
 		const char Character = DTMF_GetCharacter(Key);
 		if (Character != 0xFF)
 		{	// add key to DTMF string
