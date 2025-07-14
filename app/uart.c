@@ -536,7 +536,7 @@ bool findchar(uint8_t start, char letter) {
 
 static bool UART_Change_Frequency_Command(const char *message)
 {
-	// TODO simulate manual input
+	// get new frequency
 	if (strlen(message) == 6) {
 		char freq_input[6];
 		uint8_t _i_freq_count=0;
@@ -691,8 +691,6 @@ bool UART_IsCommandAvailable(void)
 
 				if (strlen(frMessage) > 0) {
 					if (gEeprom.TX_VFO & 1) {
-						UART_printf("\nCH>B");
-						/* TODO change channel */
 						COMMON_SwitchVFOs();
 						RADIO_ConfigureChannel(gEeprom.TX_VFO, VFO_CONFIGURE);
 						RADIO_SelectVfos();
@@ -700,14 +698,12 @@ bool UART_IsCommandAvailable(void)
 						gVFO_RSSI_bar_level[0] = 0;
 						gVFO_RSSI_bar_level[1] = 0;
 						gUpdateDisplay = 1;
-						validMsg = true;
 					}
-					else{
-						validMsg = UART_Change_Frequency_Command(frMessage);
-						if (validMsg) {
-							UART_printf("\nFREQ>%d\n",
-									gTxVfo->freq_config_TX.Frequency);
-						}
+
+					validMsg = UART_Change_Frequency_Command(frMessage);
+					if (validMsg) {
+						UART_printf("\nFREQ>%d\n",
+								gTxVfo->freq_config_TX.Frequency);
 					}
 				}
 			}
