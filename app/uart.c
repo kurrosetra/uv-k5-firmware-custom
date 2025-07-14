@@ -42,6 +42,8 @@
 #include "settings.h"
 #include "version.h"
 #include "ui/ui.h"		//change frequency
+/* TODO TEST */
+#include "common.h"		//change channel
 
 #if defined(ENABLE_OVERLAY)
 	#include "sram-overlay.h"
@@ -532,18 +534,18 @@ bool findchar(uint8_t start, char letter) {
 
 #endif
 
-static bool UART_Change_Frequency_Command(const char *frMessage)
+static bool UART_Change_Frequency_Command(const char *message)
 {
 	// TODO simulate manual input
-	if (strlen(frMessage) == 6) {
+	if (strlen(message) == 6) {
 		char freq_input[6];
 		uint8_t _i_freq_count=0;
 		while(_i_freq_count<6){
-			if ((frMessage[_i_freq_count] >= '0')
-					|| (frMessage[_i_freq_count] <= '9')) {
+			if ((message[_i_freq_count] >= '0')
+					|| (message[_i_freq_count] <= '9')) {
 
 				freq_input[_i_freq_count] =
-						frMessage[_i_freq_count];
+						message[_i_freq_count];
 				_i_freq_count++;
 			}
 			else
@@ -642,9 +644,9 @@ bool UART_IsCommandAvailable(void)
 				&& UART_DMA_Buffer[gUART_WriteIndex + 3] == 'Q'
 				&& UART_DMA_Buffer[gUART_WriteIndex + 4] == ':') {
 
-			txtStart = gUART_WriteIndex;
-			newFrequencyMsg = true;
-//			UART_printf("F:%s\r\n", &UART_DMA_Buffer[txtStart]);
+				txtStart = gUART_WriteIndex;
+				newFrequencyMsg = true;
+//				UART_printf("F:%s\r\n", &UART_DMA_Buffer[txtStart]);
 		}
 
 
@@ -688,12 +690,24 @@ bool UART_IsCommandAvailable(void)
 				remove(frMessage, '\r');
 
 				if (strlen(frMessage) > 0) {
-//					UART_printf("\nFREQ[%dB]=%s\n", strlen(frMessage),
-//							frMessage);
-					validMsg = UART_Change_Frequency_Command(frMessage);
-					if (validMsg) {
-						UART_printf("\nFREQ>%d\n",
-								gTxVfo->freq_config_TX.Frequency);
+					if (gEeprom.TX_VFO & 1) {
+						UART_printf("\nCH>B");
+						/* TODO change channel */
+						COMMON_SwitchVFOs();
+						RADIO_ConfigureChannel(gEeprom.TX_VFO, VFO_CONFIGURE);
+						RADIO_SelectVfos();
+						RADIO_SetupRegisters(true);
+						gVFO_RSSI_bar_level[0] = 0;
+						gVFO_RSSI_bar_level[1] = 0;
+						gUpdateDisplay = 1;
+						validMsg = true;
+					}
+					else{
+						validMsg = UART_Change_Frequency_Command(frMessage);
+						if (validMsg) {
+							UART_printf("\nFREQ>%d\n",
+									gTxVfo->freq_config_TX.Frequency);
+						}
 					}
 				}
 			}
