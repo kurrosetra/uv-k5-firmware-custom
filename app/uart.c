@@ -41,6 +41,9 @@
 #include "misc.h"
 #include "settings.h"
 #include "version.h"
+#include "ui/ui.h"		//change frequency
+/* TODO TEST */
+#include "common.h"		//change channel
 
 #if defined(ENABLE_OVERLAY)
 	#include "sram-overlay.h"
@@ -531,11 +534,80 @@ bool findchar(uint8_t start, char letter) {
 
 #endif
 
+static bool UART_Change_Frequency_Command(const char *message)
+{
+	// get new frequency
+	if (strlen(message) == 6) {
+		char freq_input[6];
+		uint8_t _i_freq_count=0;
+		while(_i_freq_count<6){
+			if ((message[_i_freq_count] >= '0')
+					|| (message[_i_freq_count] <= '9')) {
+
+				freq_input[_i_freq_count] =
+						message[_i_freq_count];
+				_i_freq_count++;
+			}
+			else
+				break;
+		}
+
+		const uint8_t Vfo = gEeprom.TX_VFO;
+		// user is entering a frequency
+		if ((_i_freq_count >= 6) && IS_FREQ_CHANNEL(gTxVfo->CHANNEL_SAVE))
+		{
+			uint32_t Frequency = StrToUL(freq_input) * 100;
+//			UART_printf("\nfr=%d", Frequency);
+
+			// clamp the frequency entered to some valid value
+			if (Frequency < frequencyBandTable[0].lower) {
+				Frequency = frequencyBandTable[0].lower;
+			}
+			else if (Frequency >= BX4819_band1.upper && Frequency < BX4819_band2.lower) {
+				const uint32_t center = (BX4819_band1.upper + BX4819_band2.lower) / 2;
+				Frequency = (Frequency < center) ? BX4819_band1.upper : BX4819_band2.lower;
+			}
+			else if (Frequency > frequencyBandTable[BAND_N_ELEM - 1].upper) {
+				Frequency = frequencyBandTable[BAND_N_ELEM - 1].upper;
+			}
+
+			const FREQUENCY_Band_t band = FREQUENCY_GetBand(Frequency);
+			if (gTxVfo->Band != band) {
+				gTxVfo->Band               = band;
+				gEeprom.ScreenChannel[Vfo] = band + FREQ_CHANNEL_FIRST;
+				gEeprom.FreqChannel[Vfo]   = band + FREQ_CHANNEL_FIRST;
+
+				SETTINGS_SaveVfoIndices();
+
+				RADIO_ConfigureChannel(Vfo, VFO_CONFIGURE_RELOAD);
+			}
+
+			Frequency = FREQUENCY_RoundToStep(Frequency, gTxVfo->StepFrequency);
+
+			if (Frequency >= BX4819_band1.upper && Frequency < BX4819_band2.lower)
+			{	// clamp the frequency to the limit
+				const uint32_t center = (BX4819_band1.upper + BX4819_band2.lower) / 2;
+				Frequency = (Frequency < center) ? BX4819_band1.upper - gTxVfo->StepFrequency : BX4819_band2.lower;
+			}
+
+			gTxVfo->freq_config_RX.Frequency = Frequency;
+			gTxVfo->freq_config_TX.Frequency = Frequency;
+
+			gRequestDisplayScreen = DISPLAY_MAIN;
+			gUpdateDisplay = 1;
+			return true;
+		}
+	}
+
+	return false;
+}
+
 bool UART_IsCommandAvailable(void)
 {
 	static uint8_t txtStart = 0;
 	static bool newTxtMsg = false;
 	static bool newDtmfMsg = false;
+	static bool newFrequencyMsg = false;
 	bool validMsg = false;
 
 	uint16_t Index;
@@ -562,8 +634,21 @@ bool UART_IsCommandAvailable(void)
 		if ( UART_DMA_Buffer[gUART_WriteIndex] == 'D' && UART_DMA_Buffer[gUART_WriteIndex + 1] == 'T' && UART_DMA_Buffer[ gUART_WriteIndex + 2] == 'M' && UART_DMA_Buffer[gUART_WriteIndex + 3] == 'F' && UART_DMA_Buffer[gUART_WriteIndex + 4] == ':') {
 			txtStart = gUART_WriteIndex;
 			newDtmfMsg = true;
-			UART_printf("D:%s\r\n", &UART_DMA_Buffer[txtStart]);
+//			UART_printf("D:%s\r\n", &UART_DMA_Buffer[txtStart]);
 		}
+
+		/* TODO Change Frequency handler here */
+		if (UART_DMA_Buffer[gUART_WriteIndex] == 'F'
+				&& UART_DMA_Buffer[gUART_WriteIndex + 1] == 'R'
+				&& UART_DMA_Buffer[gUART_WriteIndex + 2] == 'E'
+				&& UART_DMA_Buffer[gUART_WriteIndex + 3] == 'Q'
+				&& UART_DMA_Buffer[gUART_WriteIndex + 4] == ':') {
+
+				txtStart = gUART_WriteIndex;
+				newFrequencyMsg = true;
+//				UART_printf("F:%s\r\n", &UART_DMA_Buffer[txtStart]);
+		}
+
 
 		if(findchar(txtStart, '\n')){
 			if(newTxtMsg){
@@ -596,9 +681,35 @@ bool UART_IsCommandAvailable(void)
 				}
 				validMsg = true;
 			}
+			else if(newFrequencyMsg){
+				char frMessage[TX_MSG_LENGTH + 5];
+				memset(frMessage, 0, sizeof(frMessage));
+				snprintf(frMessage, (TX_MSG_LENGTH + 5), "%s", &UART_DMA_Buffer[txtStart + 5]);
+
+				remove(frMessage, '\n');
+				remove(frMessage, '\r');
+
+				if (strlen(frMessage) > 0) {
+					if (gEeprom.TX_VFO & 1) {
+						COMMON_SwitchVFOs();
+						RADIO_ConfigureChannel(gEeprom.TX_VFO, VFO_CONFIGURE);
+						RADIO_SelectVfos();
+						RADIO_SetupRegisters(true);
+						gVFO_RSSI_bar_level[0] = 0;
+						gVFO_RSSI_bar_level[1] = 0;
+						gUpdateDisplay = 1;
+					}
+
+					validMsg = UART_Change_Frequency_Command(frMessage);
+					if (validMsg) {
+						UART_printf("\nFREQ>%d\n",
+								gTxVfo->freq_config_TX.Frequency);
+					}
+				}
+			}
 
 			if(validMsg){
-				newTxtMsg = newDtmfMsg = false;
+				newTxtMsg = newDtmfMsg = newFrequencyMsg = false;
 				txtStart = 0;
 				memset(UART_DMA_Buffer, 0, sizeof(UART_DMA_Buffer));
 				gUART_WriteIndex = 0;

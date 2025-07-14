@@ -296,7 +296,6 @@ static void MAIN_Key_DIGITS(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 		gRequestDisplayScreen = DISPLAY_MAIN;
 
 		if (IS_MR_CHANNEL(gTxVfo->CHANNEL_SAVE)) { // user is entering channel number
-
 			if (gInputBoxIndex != 3) {
 				#ifdef ENABLE_VOICE
 					gAnotherVoiceID   = (VOICE_ID_t)Key;
@@ -356,7 +355,6 @@ static void MAIN_Key_DIGITS(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 			}
 
 			const FREQUENCY_Band_t band = FREQUENCY_GetBand(Frequency);
-
 			if (gTxVfo->Band != band) {
 				gTxVfo->Band               = band;
 				gEeprom.ScreenChannel[Vfo] = band + FREQ_CHANNEL_FIRST;
@@ -376,7 +374,6 @@ static void MAIN_Key_DIGITS(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld)
 			}
 
 			gTxVfo->freq_config_RX.Frequency = Frequency;
-
 			gRequestSaveChannel = 1;
 			return;
 
