@@ -44,7 +44,7 @@ unsigned char numberOfNumsAssignedToKey[9] = { 1, 1, 1, 1, 1, 1, 1, 1, 1 };
 
 char cMessage[TX_MSG_LENGTH];
 char lastcMessage[TX_MSG_LENGTH];
-char rxMessage[4][MAX_RX_MSG_LENGTH + 2];
+char rxMessage[4][MAX_RX_MSG_DISP_LENGTH + 2];
 unsigned char cIndex = 0;
 unsigned char prevKey = 0, prevLetter = 0;
 KeyboardType keyboardType = UPPERCASE;
@@ -652,6 +652,87 @@ uint8_t validate_char( uint8_t rchar ) {
 	return 32;
 }
 
+#ifdef ENABLE_XMESH
+void MSG_StorePacket(const uint16_t interrupt_bits) {
+	const bool rx_sync             = (interrupt_bits & BK4819_REG_02_FSK_RX_SYNC) ? true : false;
+	const bool rx_fifo_almost_full = (interrupt_bits & BK4819_REG_02_FSK_FIFO_ALMOST_FULL) ? true : false;
+	const bool rx_finished         = (interrupt_bits & BK4819_REG_02_FSK_RX_FINISHED) ? true : false;
+
+	if (rx_sync) {
+		gFSKWriteIndex = 0;
+		memset(msgFSKBuffer, 0, sizeof(msgFSKBuffer));
+		msgStatus = RECEIVING;
+	}
+
+	if (rx_fifo_almost_full && msgStatus == RECEIVING) {
+
+		const uint16_t count = BK4819_ReadRegister(BK4819_REG_5E) & (7u << 0);  // almost full threshold
+		for (uint16_t i = 0; i < count; i++) {
+			const uint16_t word = BK4819_ReadRegister(BK4819_REG_5F);
+			if (gFSKWriteIndex < sizeof(msgFSKBuffer))
+				msgFSKBuffer[gFSKWriteIndex++] = (word >> 0) & 0xFF;
+			if (gFSKWriteIndex < sizeof(msgFSKBuffer))
+				msgFSKBuffer[gFSKWriteIndex++] = (word >> 8) & 0xFF;
+		}
+
+		SYSTEM_DelayMs(10);
+	}
+
+	if (rx_finished) {
+
+		const uint16_t fsk_reg59 = BK4819_ReadRegister(BK4819_REG_59) & ~((1u << 15) | (1u << 14) | (1u << 12) | (1u << 11));
+
+		BK4819_WriteRegister(BK4819_REG_59, (1u << 15) | (1u << 14) | fsk_reg59);
+		BK4819_WriteRegister(BK4819_REG_59, (1u << 12) | fsk_reg59);
+		msgStatus = READY;
+
+		if (gFSKWriteIndex > 0) {
+			moveUP(rxMessage);
+
+			const uint16_t rssi_reg67 = BK4819_ReadRegister(BK4819_REG_67) & 0x1FF;
+			int16_t rssi_dBm = rssi_reg67 / 2 - 160;
+			#ifdef ENABLE_MESSENGER_UART
+			UART_printf("rssi=%ddBm\n", rssi_dBm);
+			#endif
+
+			if (msgFSKBuffer[0] == 'M' && msgFSKBuffer[1] == 'S') {
+				snprintf(rxMessage[3],TX_MSG_LENGTH+2,"< %s",&msgFSKBuffer[2]);
+				#ifdef ENABLE_MESSENGER_UART
+				UART_printf("SMS%s\n", rxMessage[3]);
+				#endif
+			}
+			else if (msgFSKBuffer[0] == 'X' && msgFSKBuffer[1] == 'M') {
+				// check CRC
+				snprintf(rxMessage[3],TX_MSG_LENGTH+2,"< %s",&msgFSKBuffer[2]);
+			}
+			else {
+				snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "? unknown msg format!");
+			}
+
+			if ( gScreenToDisplay != DISPLAY_MSG ) {
+				hasNewMessage = 1;
+				gUpdateStatus = true;
+				gUpdateDisplay = true;
+				#ifdef ENABLE_MESSENGER_NOTIFICATION
+				gPlayMSGRing = true;
+				#endif
+			}
+			else {
+				gUpdateDisplay = true;
+			}
+
+		}
+
+		gFSKWriteIndex = 0;
+		#ifdef ENABLE_MESSENGER_DELIVERY_NOTIFICATION
+		// Transmit a message to the sender that we have received the message (Unless it's a service message)
+		if (msgFSKBuffer[0] == 'M' && msgFSKBuffer[1] == 'S' && msgFSKBuffer[2] != 0x1b) {
+			MSG_Send("\x1b\x1b\x1bRCVD", true);
+		}
+		#endif
+	}
+}
+#else	//#ifdef ENABLE_XMESH
 void MSG_StorePacket(const uint16_t interrupt_bits) {
 
 	//const uint16_t rx_sync_flags   = BK4819_ReadRegister(BK4819_REG_0B);
@@ -724,6 +805,10 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 					#ifdef ENABLE_MESSENGER_UART
 					UART_printf("SMS%s\n", rxMessage[3]);
 					#endif
+
+					const uint16_t rssi_reg67 = BK4819_ReadRegister(BK4819_REG_67) & 0x1FF;
+					int16_t rssi_dBm = rssi_reg67 / 2 - 160;
+					UART_printf("rssi=%ddBm\n", rssi_dBm);
 				}			
 
 				if ( gScreenToDisplay != DISPLAY_MSG ) {
@@ -749,6 +834,7 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 		#endif
 	}
 }
+#endif	//#ifdef ENABLE_XMESH
 
 void MSG_Init() {
 	memset(rxMessage, 0, sizeof(rxMessage));

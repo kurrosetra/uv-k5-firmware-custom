@@ -54,21 +54,21 @@ ENABLE_LTO                    ?= 1
 
 # --- joaquim.org
 ENABLE_MESSENGER              			?= 1
-ENABLE_MESSENGER_DELIVERY_NOTIFICATION	?= 1
+ENABLE_MESSENGER_DELIVERY_NOTIFICATION	?= 0
 ENABLE_MESSENGER_NOTIFICATION			?= 1
 ENABLE_MESSENGER_UART					?= 1
 
 # Work in progress
 ENABLE_PMR_MODE               ?= 0
-
+ENABLE_XMESH				  ?= 1
 
 #### INTERNAL USE ####
 ENABLE_SCREEN_DUMP			  ?= 0
 
 #------------------------------------------------------------------------------
 AUTHOR_STRING ?= JOAQUIM
-VERSION_STRING ?= V0.3.6B
-PROJECT_NAME := cfw_kurro_oefw_V0.3.6B
+VERSION_STRING ?= V0.3.6C
+PROJECT_NAME := cfw_kurro_oefw_$(VERSION_STRING)
 
 BUILD := _build
 BIN := firmware
@@ -385,6 +385,9 @@ ifeq ($(ENABLE_MESSENGER_NOTIFICATION),1)
 endif
 ifeq ($(ENABLE_MESSENGER_UART),1)
 	CFLAGS += -DENABLE_MESSENGER_UART
+endif
+ifeq ($(ENABLE_XMESH),1)
+	CFLAGS += -DENABLE_XMESH
 endif
 
 # C flags common to all targets
