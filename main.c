@@ -49,6 +49,9 @@
 #include "ui/lock.h"
 #include "ui/welcome.h"
 #include "ui/menu.h"
+
+//#include "driver/eeprom.h"
+
 void _putchar(__attribute__((unused)) char c)
 {
 
@@ -171,6 +174,19 @@ void Main(void)
 	else
 	{
 		UI_DisplayWelcome();
+
+//		char name[16],id[16];
+//		SETTINGS_LoadLogoInfo(name, id);
+//		UART_printf("[%s:%d]%s %s\n", __FILE__, __LINE__, name, id);
+//		strcpy(name,"Dheeny");
+//		strcpy(id, "991");
+//		SETTINGS_SaveLogoInfo(name,id);
+//		uint8_t Data[16] = {0};
+//		// 0E90..0E97
+//		EEPROM_ReadBuffer(0x0E90, Data, 8);
+//		UART_printf("power on display=%x\n", Data[7]);
+//		Data[7] = POWER_ON_DISPLAY_MODE_MESSAGE;
+//		EEPROM_WriteBuffer(0x0E90, Data);
 
 		BACKLIGHT_TurnOn();
 

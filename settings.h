@@ -286,4 +286,7 @@ void SETTINGS_SaveBatteryCalibration(const uint16_t * batteryCalibration);
 void SETTINGS_UpdateChannel(uint8_t channel, const VFO_Info_t *pVFO, bool keep);
 void SETTINGS_WriteBuildOptions(void);
 
+void SETTINGS_LoadLogoInfo(char name[8], char id[8]);
+void SETTINGS_SaveLogoInfo(const char name[8], const char id[8]);
+
 #endif
