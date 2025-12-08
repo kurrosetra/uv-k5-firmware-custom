@@ -527,6 +527,25 @@ void MSG_EnableRX(const bool enable) {
 
 // -----------------------------------------------------
 
+// Polynomial for CRC-8 (x^8 + x^2 + x + 1)
+#define CRC8_POLY			0x07
+
+// Function to compute CRC-8
+static uint8_t crc8_compute(const uint8_t *data, const size_t len) {
+    uint8_t crc = 0x00; // Initial value
+    for (size_t i = 0; i < len; i++) {
+        crc ^= data[i];
+        for (uint8_t j = 0; j < 8; j++) {
+            if (crc & 0x80) {
+                crc = (crc << 1) ^ CRC8_POLY;
+            } else {
+                crc <<= 1;
+            }
+        }
+    }
+    return crc;
+}
+
 void moveUP(char (*rxMessages)[MAX_RX_MSG_LENGTH + 2]) {
     // Shift existing lines up
     strcpy(rxMessages[0], rxMessages[1]);
@@ -572,6 +591,12 @@ void DTMF_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 	}
 }
 
+void XMESH_send(const char txMessage[TX_MSG_LENGTH], const char headerMessage[MSG_HEADER_LENGTH])
+{
+	crc8_compute((const uint8_t*) txMessage, TX_MSG_LENGTH);
+	crc8_compute((const uint8_t*) headerMessage, MSG_HEADER_LENGTH);
+}
+
 void MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 
 	if ( msgStatus != READY ) return;
@@ -586,20 +611,27 @@ void MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 		memset(msgFSKBuffer, 0, sizeof(msgFSKBuffer));
 
 		// ? ToDo
-		// first 20 byte sync, msg type and ID
+		// first 2 byte sync, message type
 		msgFSKBuffer[0] = 'M';
 		msgFSKBuffer[1] = 'S';
-
-		// next 20 for msg
+		// next 30 for msg
 		memcpy(msgFSKBuffer + 2, txMessage, TX_MSG_LENGTH);
 
-		// CRC ? ToDo
+		// next MSG_HEADER_LENGTH for header
+		// ? ToDo
+		// [0] 		: message type ('0' standard format, '1' external Meshtastic format)
+		// [1..2] 	: destination ID
+		// [3..4] 	: sender ID
+		// [5] 		: packet ID
+		// [6]		: hop counter
+		// [7]		: payload len
+		// [8..9]	: CRC-8
 
 		msgFSKBuffer[MAX_RX_MSG_LENGTH - 1] = '\0';
-		msgFSKBuffer[MAX_RX_MSG_LENGTH + 0] = 'I';
-		msgFSKBuffer[MAX_RX_MSG_LENGTH + 1] = 'D';
-		msgFSKBuffer[MAX_RX_MSG_LENGTH + 2] = '0';
-		msgFSKBuffer[(MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH) - 1] = '#';
+		msgFSKBuffer[MAX_RX_MSG_LENGTH + 0] = '0';
+//		msgFSKBuffer[MAX_RX_MSG_LENGTH + 1] = 'D';
+//		msgFSKBuffer[MAX_RX_MSG_LENGTH + 2] = '0';
+//		msgFSKBuffer[(MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH) - 1] = '#';
 
 		BK4819_DisableDTMF();
 		// mute the mic during TX
@@ -687,13 +719,15 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 		msgStatus = READY;
 
 		if (gFSKWriteIndex > 0) {
-			moveUP(rxMessage);
+//			moveUP(rxMessage);
 
 			const uint16_t rssi_reg67 = BK4819_ReadRegister(BK4819_REG_67) & 0x1FF;
 			int16_t rssi_dBm = rssi_reg67 / 2 - 160;
 			#ifdef ENABLE_MESSENGER_UART
 			UART_printf("rssi=%ddBm\n", rssi_dBm);
 			#endif
+
+//			if(msgFSKBuffer[rxMessage[MAX_RX_MSG_LENGTH]])
 
 			if (msgFSKBuffer[0] == 'M' && msgFSKBuffer[1] == 'S') {
 				snprintf(rxMessage[3],TX_MSG_LENGTH+2,"< %s",&msgFSKBuffer[2]);
