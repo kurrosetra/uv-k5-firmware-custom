@@ -59,6 +59,46 @@ uint8_t hasNewMessage = 0;
 
 uint8_t keyTickCounter = 0;
 
+typedef struct
+{
+	char type;
+	uint16_t destination_id;
+	uint16_t sender_id;
+	uint8_t packet_id;
+	uint8_t hop_counter;
+	uint8_t crc8;
+} MeshHeader_t;
+
+typedef struct
+{
+	uint8_t payload[TX_MSG_LENGTH];
+	MeshHeader_t header;
+} MeshContent_t;
+
+typedef struct
+{
+	MeshContent_t val;
+	uint32_t timestamp_received;
+	uint32_t time_to_be_sent;
+	uint8_t recv_counter;
+//	struct
+//	{
+//		uint8_t track_enable :1;
+//		uint8_t stab_mode :2;
+//		uint8_t resvBit :5;
+//	} __attribute__ ((packed)) state;
+} MeshBuffer_t;
+
+#define XMESH_BUFFER_SIZE		50
+#if XMESH_BUFFER_SIZE >= 100
+#warning "XMESH_BUFFER_SIZE increase RAM needed"
+#elif XMESH_BUFFER_SIZE > 255
+#error "XMESH_BUFFER_SIZE must be in uin8_t boundary"
+#endif
+MeshBuffer_t xMeshBuffer[XMESH_BUFFER_SIZE];
+uint8_t xMeshIndexStart = 0;
+uint8_t xMeshIndexEnd = 0;
+
 // -----------------------------------------------------
 
 void MSG_FSKSendData() {
@@ -591,10 +631,74 @@ void DTMF_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 	}
 }
 
-void XMESH_send(const char txMessage[TX_MSG_LENGTH], const char headerMessage[MSG_HEADER_LENGTH])
+bool XMESH_send(const char txMessage[TX_MSG_LENGTH], const char headerMessage[MSG_HEADER_LENGTH])
 {
-	crc8_compute((const uint8_t*) txMessage, TX_MSG_LENGTH);
-	crc8_compute((const uint8_t*) headerMessage, MSG_HEADER_LENGTH);
+	if ( msgStatus != READY ) return false;
+
+	if ( strlen(txMessage) > 0 && (TX_freq_check(gCurrentVfo->pTX->Frequency) == 0) ) {
+
+		memset(msgFSKBuffer, 0, sizeof(msgFSKBuffer));
+		// first 2 byte sync, message type
+		msgFSKBuffer[0] = 'M';
+		msgFSKBuffer[1] = 'S';
+		memcpy(msgFSKBuffer + 2, txMessage, TX_MSG_LENGTH);
+		memcpy(msgFSKBuffer + MAX_RX_MSG_LENGTH, headerMessage, MSG_HEADER_LENGTH);
+
+		uint8_t crc8_value = crc8_compute(msgFSKBuffer + 2, TX_MSG_LENGTH + MSG_HEADER_LENGTH - 1);
+		if(crc8_value!= headerMessage[MSG_HEADER_LENGTH-1])
+			return false;
+
+		msgStatus = SENDING;
+
+		RADIO_SetVfoState(VFO_STATE_NORMAL);
+		BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, true);
+
+		BK4819_DisableDTMF();
+		// mute the mic during TX
+		gMuteMic = true;
+
+		//RADIO_SetTxParameters();
+		FUNCTION_Select(FUNCTION_TRANSMIT);
+		//SYSTEM_DelayMs(500);
+		//BK4819_PlayRogerNormal(98);
+		SYSTEM_DelayMs(100);
+
+		//BK4819_ExitTxMute();
+
+		MSG_FSKSendData();
+
+		SYSTEM_DelayMs(50);
+
+		APP_EndTransmission(true);
+		// this must be run after end of TX, otherwise radio will still TX transmit without even RED LED on
+		FUNCTION_Select(FUNCTION_FOREGROUND);
+		RADIO_SetVfoState(VFO_STATE_NORMAL);
+
+		// disable mic mute after TX
+		gMuteMic = false;
+
+		BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, false);
+
+		MSG_EnableRX(true);
+
+		// update display message
+//			moveUP(rxMessage);
+//			sprintf(rxMessage[3], "> %s", txMessage);
+//			memset(lastcMessage, 0, sizeof(lastcMessage));
+//			memcpy(lastcMessage, txMessage, TX_MSG_LENGTH);
+//			cIndex = 0;
+//			prevKey = 0;
+//			prevLetter = 0;
+//			memset(cMessage, 0, sizeof(cMessage));
+
+		msgStatus = READY;
+
+		return true;
+	} else {
+		AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL);
+	}
+
+	return false;
 }
 
 void MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
@@ -610,7 +714,6 @@ void MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 
 		memset(msgFSKBuffer, 0, sizeof(msgFSKBuffer));
 
-		// ? ToDo
 		// first 2 byte sync, message type
 		msgFSKBuffer[0] = 'M';
 		msgFSKBuffer[1] = 'S';
@@ -618,20 +721,16 @@ void MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 		memcpy(msgFSKBuffer + 2, txMessage, TX_MSG_LENGTH);
 
 		// next MSG_HEADER_LENGTH for header
-		// ? ToDo
 		// [0] 		: message type ('0' standard format, '1' external Meshtastic format)
 		// [1..2] 	: destination ID
 		// [3..4] 	: sender ID
 		// [5] 		: packet ID
 		// [6]		: hop counter
-		// [7]		: payload len
-		// [8..9]	: CRC-8
+		// [7]		: CRC-8
 
-		msgFSKBuffer[MAX_RX_MSG_LENGTH - 1] = '\0';
-		msgFSKBuffer[MAX_RX_MSG_LENGTH + 0] = '0';
-//		msgFSKBuffer[MAX_RX_MSG_LENGTH + 1] = 'D';
-//		msgFSKBuffer[MAX_RX_MSG_LENGTH + 2] = '0';
-//		msgFSKBuffer[(MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH) - 1] = '#';
+		msgFSKBuffer[MAX_RX_MSG_LENGTH] = '0';
+		msgFSKBuffer[MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1] = crc8_compute(
+				(const uint8_t*) msgFSKBuffer, sizeof(msgFSKBuffer) - 1);
 
 		BK4819_DisableDTMF();
 		// mute the mic during TX
@@ -719,7 +818,7 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 		msgStatus = READY;
 
 		if (gFSKWriteIndex > 0) {
-//			moveUP(rxMessage);
+			moveUP(rxMessage);
 
 			const uint16_t rssi_reg67 = BK4819_ReadRegister(BK4819_REG_67) & 0x1FF;
 			int16_t rssi_dBm = rssi_reg67 / 2 - 160;
@@ -727,17 +826,19 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 			UART_printf("rssi=%ddBm\n", rssi_dBm);
 			#endif
 
-//			if(msgFSKBuffer[rxMessage[MAX_RX_MSG_LENGTH]])
 
 			if (msgFSKBuffer[0] == 'M' && msgFSKBuffer[1] == 'S') {
-				snprintf(rxMessage[3],TX_MSG_LENGTH+2,"< %s",&msgFSKBuffer[2]);
-				#ifdef ENABLE_MESSENGER_UART
-				UART_printf("SMS%s\n", rxMessage[3]);
-				#endif
-			}
-			else if (msgFSKBuffer[0] == 'X' && msgFSKBuffer[1] == 'M') {
-				// check CRC
-				snprintf(rxMessage[3],TX_MSG_LENGTH+2,"< %s",&msgFSKBuffer[2]);
+				// standard message
+				if (msgFSKBuffer[MAX_RX_MSG_LENGTH] == '0') {
+					snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "< %s", &msgFSKBuffer[2]);
+					#ifdef ENABLE_MESSENGER_UART
+					UART_printf("SMS%s\n", rxMessage[3]);
+					#endif
+				}
+				// external meshtastic message
+				else if (msgFSKBuffer[MAX_RX_MSG_LENGTH] == '1') {
+					snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "x mesh format!");
+				}
 			}
 			else {
 				snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "? unknown msg format!");

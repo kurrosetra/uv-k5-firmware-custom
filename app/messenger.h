@@ -17,9 +17,10 @@ typedef enum KeyboardType {
 
 enum { 
 	TX_MSG_LENGTH = 30,
-	MSG_HEADER_LENGTH = 10,
+	MSG_HEADER_LENGTH = 8,
 	MAX_RX_MSG_LENGTH = TX_MSG_LENGTH + 2,
-	MAX_RX_MSG_DISP_LENGTH = TX_MSG_LENGTH + 2
+	MAX_RX_MSG_DISP_LENGTH = TX_MSG_LENGTH + 2,
+	XMESH_STATE_LENGTH = 10
 };
 //const uint8_t TX_MSG_LENGTH = 30;
 //const uint8_t MAX_RX_MSG_LENGTH = TX_MSG_LENGTH + 2;
@@ -38,6 +39,7 @@ void MSG_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld);
 void MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage);
 
 void DTMF_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage);
+bool XMESH_send(const char txMessage[TX_MSG_LENGTH], const char headerMessage[MSG_HEADER_LENGTH]);
 
 #endif
 
