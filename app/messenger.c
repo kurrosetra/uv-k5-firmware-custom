@@ -23,6 +23,11 @@
 	#include "driver/uart.h"
 #endif
 
+#if defined(ENABLE_XMESH)
+	#include <stdlib.h>
+	#include "driver/eeprom.h"
+#endif
+
 typedef enum MsgStatus {
 	READY,
   	SENDING,
@@ -61,11 +66,11 @@ uint8_t keyTickCounter = 0;
 
 typedef struct
 {
-	char type;
 	uint16_t destination_id;
 	uint16_t sender_id;
 	uint8_t packet_id;
 	uint8_t hop_counter;
+	uint8_t reserved_byte;
 	uint8_t crc8;
 } MeshHeader_t;
 
@@ -81,12 +86,6 @@ typedef struct
 	uint32_t timestamp_received;
 	uint32_t time_to_be_sent;
 	uint8_t recv_counter;
-//	struct
-//	{
-//		uint8_t track_enable :1;
-//		uint8_t stab_mode :2;
-//		uint8_t resvBit :5;
-//	} __attribute__ ((packed)) state;
 } MeshBuffer_t;
 
 #define XMESH_BUFFER_SIZE		50
@@ -96,8 +95,9 @@ typedef struct
 #error "XMESH_BUFFER_SIZE must be in uin8_t boundary"
 #endif
 MeshBuffer_t xMeshBuffer[XMESH_BUFFER_SIZE];
-uint8_t xMeshIndexStart = 0;
-uint8_t xMeshIndexEnd = 0;
+uint16_t base_id = 0;
+uint8_t xMeshIndexHead = 0;
+uint8_t xMeshIndexTail = 0;
 
 // -----------------------------------------------------
 
@@ -631,11 +631,47 @@ void DTMF_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 	}
 }
 
-bool XMESH_send(const char txMessage[TX_MSG_LENGTH], const char headerMessage[MSG_HEADER_LENGTH])
+uint16_t MSG_GetId()
 {
-	if ( msgStatus != READY ) return false;
+	return base_id;
+}
+
+void MSG_SetId(const char name[8],const char id[8])
+{
+	uint8_t _number[8];
+
+	memcpy(_number, id, 8);
+
+	base_id = atoi(id);
+	if (base_id == 0) {
+		base_id = 1;
+		snprintf((char*) _number, sizeof(_number), "1");
+	}
+
+	// save to EEPROM
+	SETTINGS_SaveLogoInfo(name, (const char*) _number);
+	// make sure in POWER_ON_DISPLAY_MODE_MESSAGE mode
+	// 0E90..0E97
+	EEPROM_ReadBuffer(0x0E90, _number, 8);
+	UART_printf("power on display=%x\n", _number[7]);
+	_number[7] = POWER_ON_DISPLAY_MODE_MESSAGE;
+	EEPROM_WriteBuffer(0x0E90, _number);
+}
+
+bool MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
+
+		if ( msgStatus != READY ) return false;
 
 	if ( strlen(txMessage) > 0 && (TX_freq_check(gCurrentVfo->pTX->Frequency) == 0) ) {
+
+		// next MSG_HEADER_LENGTH for header
+		// [0..1] 	: destination ID
+		// [2..3] 	: sender ID
+		// [4] 		: packet ID
+		// [5]		: hop counter
+		// [6]		: (reserved byte)
+		// [7]		: CRC-8
+		uint8_t headerMessage[MSG_HEADER_LENGTH];
 
 		memset(msgFSKBuffer, 0, sizeof(msgFSKBuffer));
 		// first 2 byte sync, message type
@@ -648,89 +684,11 @@ bool XMESH_send(const char txMessage[TX_MSG_LENGTH], const char headerMessage[MS
 		if(crc8_value!= headerMessage[MSG_HEADER_LENGTH-1])
 			return false;
 
-		msgStatus = SENDING;
-
-		RADIO_SetVfoState(VFO_STATE_NORMAL);
-		BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, true);
-
-		BK4819_DisableDTMF();
-		// mute the mic during TX
-		gMuteMic = true;
-
-		//RADIO_SetTxParameters();
-		FUNCTION_Select(FUNCTION_TRANSMIT);
-		//SYSTEM_DelayMs(500);
-		//BK4819_PlayRogerNormal(98);
-		SYSTEM_DelayMs(100);
-
-		//BK4819_ExitTxMute();
-
-		MSG_FSKSendData();
-
-		SYSTEM_DelayMs(50);
-
-		APP_EndTransmission(true);
-		// this must be run after end of TX, otherwise radio will still TX transmit without even RED LED on
-		FUNCTION_Select(FUNCTION_FOREGROUND);
-		RADIO_SetVfoState(VFO_STATE_NORMAL);
-
-		// disable mic mute after TX
-		gMuteMic = false;
-
-		BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, false);
-
-		MSG_EnableRX(true);
-
-		// update display message
-//			moveUP(rxMessage);
-//			sprintf(rxMessage[3], "> %s", txMessage);
-//			memset(lastcMessage, 0, sizeof(lastcMessage));
-//			memcpy(lastcMessage, txMessage, TX_MSG_LENGTH);
-//			cIndex = 0;
-//			prevKey = 0;
-//			prevLetter = 0;
-//			memset(cMessage, 0, sizeof(cMessage));
-
-		msgStatus = READY;
-
-		return true;
-	} else {
-		AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL);
-	}
-
-	return false;
-}
-
-void MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
-
-	if ( msgStatus != READY ) return;
-
-	if ( strlen(txMessage) > 0 && (TX_freq_check(gCurrentVfo->pTX->Frequency) == 0) ) {
 
 		msgStatus = SENDING;
 
 		RADIO_SetVfoState(VFO_STATE_NORMAL);
 		BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, true);
-
-		memset(msgFSKBuffer, 0, sizeof(msgFSKBuffer));
-
-		// first 2 byte sync, message type
-		msgFSKBuffer[0] = 'M';
-		msgFSKBuffer[1] = 'S';
-		// next 30 for msg
-		memcpy(msgFSKBuffer + 2, txMessage, TX_MSG_LENGTH);
-
-		// next MSG_HEADER_LENGTH for header
-		// [0] 		: message type ('0' standard format, '1' external Meshtastic format)
-		// [1..2] 	: destination ID
-		// [3..4] 	: sender ID
-		// [5] 		: packet ID
-		// [6]		: hop counter
-		// [7]		: CRC-8
-
-		msgFSKBuffer[MAX_RX_MSG_LENGTH] = '0';
-		msgFSKBuffer[MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1] = crc8_compute(
-				(const uint8_t*) msgFSKBuffer, sizeof(msgFSKBuffer) - 1);
 
 		BK4819_DisableDTMF();
 		// mute the mic during TX
@@ -771,9 +729,12 @@ void MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 		}
 		msgStatus = READY;
 
+		return true;
 	} else {
 		AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL);
 	}
+
+	return false;
 }
 
 uint8_t validate_char( uint8_t rchar ) {
@@ -826,7 +787,6 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 			UART_printf("rssi=%ddBm\n", rssi_dBm);
 			#endif
 
-
 			if (msgFSKBuffer[0] == 'M' && msgFSKBuffer[1] == 'S') {
 				// standard message
 				if (msgFSKBuffer[MAX_RX_MSG_LENGTH] == '0') {
@@ -855,7 +815,6 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 			else {
 				gUpdateDisplay = true;
 			}
-
 		}
 
 		gFSKWriteIndex = 0;
@@ -980,6 +939,27 @@ void MSG_Init() {
 	prevKey = 0;
     prevLetter = 0;
 	cIndex = 0;
+
+	#ifdef ENABLE_XMESH
+	for ( int i = 0; i < XMESH_BUFFER_SIZE; ++i ) {
+		memset(&xMeshBuffer[i], 0, sizeof(MeshBuffer_t));
+	}
+
+	char _name[8], _number[8];
+	SETTINGS_LoadLogoInfo(_name, _number);
+	base_id = atoi(_number);
+	if (gEeprom.POWER_ON_DISPLAY_MODE == POWER_ON_DISPLAY_MODE_VOLTAGE || base_id == 0) {
+		base_id = 1;
+		snprintf(_name, sizeof(_name), "net01");
+		snprintf(_number, sizeof(_number), "%d", base_id);
+		MSG_SetId(_name, _number);
+	}
+	else {
+		UART_printf("net=%s:id=%d", _name, base_id);
+	}
+
+
+	#endif
 }
 
 // ---------------------------------------------------------------------------------
@@ -1050,8 +1030,8 @@ void  MSG_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld) {
 			case KEY_F:
 				if (gEeprom.KEY_LOCK && gKeypadLocked > 0) {
 		 			COMMON_KeypadLockToggle();
-				} else {
-					MSG_Init();
+//				} else {
+//					MSG_Init();
 				}
 				break;
 			default:

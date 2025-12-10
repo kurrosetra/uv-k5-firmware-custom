@@ -629,6 +629,7 @@ bool UART_IsCommandAvailable(void)
 	static bool newDtmfMsg = false;
 	static bool newFrequencyMsg = false;
 	static bool newLogoSet = false;
+	static bool newLogoGet = false;
 	bool validMsg = false;
 
 	uint16_t Index;
@@ -648,23 +649,28 @@ bool UART_IsCommandAvailable(void)
 		if ( UART_DMA_Buffer[gUART_WriteIndex] == 'S' && UART_DMA_Buffer[gUART_WriteIndex + 1] == 'M' && UART_DMA_Buffer[ gUART_WriteIndex + 2] == 'S' && UART_DMA_Buffer[gUART_WriteIndex + 3] == ':') {
 			txtStart = gUART_WriteIndex;
 			newTxtMsg = true;
-			//UART_printf("1:%s\r\n", &UART_DMA_Buffer[txtStart]);
+			//UART_printf("M:%s\r\n", &UART_DMA_Buffer[txtStart]);
 		}
 
-		if ( UART_DMA_Buffer[gUART_WriteIndex] == 'S' && UART_DMA_Buffer[gUART_WriteIndex + 1] == 'E' && UART_DMA_Buffer[ gUART_WriteIndex + 2] == 'T' && UART_DMA_Buffer[gUART_WriteIndex + 3] == ':') {
+		if ( UART_DMA_Buffer[gUART_WriteIndex] == 'S' && UART_DMA_Buffer[gUART_WriteIndex + 1] == 'I' && UART_DMA_Buffer[ gUART_WriteIndex + 2] == 'D' && UART_DMA_Buffer[gUART_WriteIndex + 3] == ':') {
 			txtStart = gUART_WriteIndex;
 			newLogoSet = true;
-			UART_printf("1:%s\r\n", &UART_DMA_Buffer[txtStart]);
+//			UART_printf("S:%s\r\n", &UART_DMA_Buffer[txtStart]);
 		}
 
-		/* TODO DTMF Send handler here */
+		if ( UART_DMA_Buffer[gUART_WriteIndex] == 'G' && UART_DMA_Buffer[gUART_WriteIndex + 1] == 'I' && UART_DMA_Buffer[ gUART_WriteIndex + 2] == 'D' && UART_DMA_Buffer[gUART_WriteIndex + 3] == '?') {
+			txtStart = gUART_WriteIndex;
+			newLogoGet = true;
+		}
+
+		/* DTMF Send handler here */
 		if ( UART_DMA_Buffer[gUART_WriteIndex] == 'D' && UART_DMA_Buffer[gUART_WriteIndex + 1] == 'T' && UART_DMA_Buffer[ gUART_WriteIndex + 2] == 'M' && UART_DMA_Buffer[gUART_WriteIndex + 3] == 'F' && UART_DMA_Buffer[gUART_WriteIndex + 4] == ':') {
 			txtStart = gUART_WriteIndex;
 			newDtmfMsg = true;
 //			UART_printf("D:%s\r\n", &UART_DMA_Buffer[txtStart]);
 		}
 
-		/* TODO Change Frequency handler here */
+		/* Change Frequency handler here */
 		if (UART_DMA_Buffer[gUART_WriteIndex] == 'F'
 				&& UART_DMA_Buffer[gUART_WriteIndex + 1] == 'R'
 				&& UART_DMA_Buffer[gUART_WriteIndex + 2] == 'E'
@@ -678,13 +684,16 @@ bool UART_IsCommandAvailable(void)
 
 
 		if (findchar(txtStart, '\n')) {
+			// SMS:[target id in 4B hex ASCII],[PAYLOAD]\n
 			if (newTxtMsg) {
-				char txMessage[TX_MSG_LENGTH + 4];
+				char txMessage[TX_MSG_LENGTH + 16];
 				memset(txMessage, 0, sizeof(txMessage));
-				snprintf(txMessage, (TX_MSG_LENGTH + 4), "%s", &UART_DMA_Buffer[txtStart + 4]);
+				int len = snprintf(txMessage, sizeof(txMessage), "%s",
+						&UART_DMA_Buffer[txtStart + 4]);
 
 				remove(txMessage, '\n');
 				remove(txMessage, '\r');
+				UART_printf("s[%dB:%d]=%s\n", len, sizeof(txMessage), txMessage);
 
 				if (strlen(txMessage) > 0) {
 					MSG_Send(txMessage, false);
@@ -698,28 +707,24 @@ bool UART_IsCommandAvailable(void)
 
 				char idMessage[24];
 				memset(idMessage, 0, sizeof(idMessage));
-				snprintf(idMessage, 24, "%s", &UART_DMA_Buffer[txtStart + 4]);
+				snprintf(idMessage, sizeof(idMessage), "%s", &UART_DMA_Buffer[txtStart + 4]);
 				remove(idMessage, '\n');
 				remove(idMessage, '\r');
 
 				if (strlen(idMessage) > 0) {
 					_id_parse(idMessage , _name, _number);
 //					UART_printf("%s->%s %s", idMessage, _name, _number);
-					// save to EEPROM
-					SETTINGS_SaveLogoInfo(_name, _number);
-					// make sure in POWER_ON_DISPLAY_MODE_MESSAGE mode
-					// 0E90..0E97
-					EEPROM_ReadBuffer(0x0E90, _number, 8);
-					UART_printf("power on display=%x\n", _number[7]);
-					_number[7] = POWER_ON_DISPLAY_MODE_MESSAGE;
-					EEPROM_WriteBuffer(0x0E90, _number);
+					MSG_SetId(_name, _number);
 				}
 				validMsg = true;
+			}
+			else if (newLogoGet) {
+				UART_printf("base_id=%d\n", MSG_GetId());
 			}
 			else if (newDtmfMsg) {
 				char dtMessage[TX_MSG_LENGTH + 5];
 				memset(dtMessage, 0, sizeof(dtMessage));
-				snprintf(dtMessage, (TX_MSG_LENGTH + 5), "%s", &UART_DMA_Buffer[txtStart + 5]);
+				snprintf(dtMessage, sizeof(dtMessage), "%s", &UART_DMA_Buffer[txtStart + 5]);
 
 				remove(dtMessage, '\n');
 				remove(dtMessage, '\r');
@@ -734,7 +739,7 @@ bool UART_IsCommandAvailable(void)
 			else if (newFrequencyMsg) {
 				char frMessage[TX_MSG_LENGTH + 5];
 				memset(frMessage, 0, sizeof(frMessage));
-				snprintf(frMessage, (TX_MSG_LENGTH + 5), "%s", &UART_DMA_Buffer[txtStart + 5]);
+				snprintf(frMessage, sizeof(frMessage), "%s", &UART_DMA_Buffer[txtStart + 5]);
 
 				remove(frMessage, '\n');
 				remove(frMessage, '\r');
@@ -758,7 +763,7 @@ bool UART_IsCommandAvailable(void)
 			}
 
 			if (validMsg) {
-				newTxtMsg = newDtmfMsg = newFrequencyMsg = newLogoSet = false;
+				newTxtMsg = newDtmfMsg = newFrequencyMsg = newLogoSet = newLogoGet = false;
 				txtStart = 0;
 				memset(UART_DMA_Buffer, 0, sizeof(UART_DMA_Buffer));
 				gUART_WriteIndex = 0;

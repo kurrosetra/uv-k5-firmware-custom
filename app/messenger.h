@@ -36,10 +36,12 @@ void MSG_EnableRX(const bool enable);
 void MSG_StorePacket(const uint16_t interrupt_bits);
 void MSG_Init();
 void MSG_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld);
-void MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage);
+bool MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage);
 
 void DTMF_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage);
-bool XMESH_send(const char txMessage[TX_MSG_LENGTH], const char headerMessage[MSG_HEADER_LENGTH]);
+
+uint16_t MSG_GetId();
+void MSG_SetId(const char name[8],const char id[8]);
 
 #endif
 
