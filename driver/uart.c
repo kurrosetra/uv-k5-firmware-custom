@@ -41,10 +41,10 @@ void UART_Init(void)
 	}
 
 	// 48M, the baud rate is set to 115200, then UARTDIV=48000000/115200=416.6, 417 can be selected based on rounding.
-//	UART1->BAUD = Frequency / 39053U;
+	UART1->BAUD = Frequency / 39053U;
 //	UART1->BAUD = 48000000U / 38400U;
-	UART1->BAUD = 1250U;
-	
+//	UART1->BAUD = 1250U;
+
 	//UART1->BAUD = Frequency / 115200;
 	//UART1->BAUD = 48000000U / 128000;
 

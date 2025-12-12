@@ -118,6 +118,7 @@ void Main(void)
 
 #ifdef ENABLE_MESSENGER
 	MSG_Init();
+	XMESH_INIT();
 #endif
 
 	const BOOT_Mode_t  BootMode = BOOT_GetMode();

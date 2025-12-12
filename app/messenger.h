@@ -42,6 +42,8 @@ void DTMF_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage);
 
 uint16_t MSG_GetId();
 void MSG_SetId(const char name[8],const char id[8]);
+void XMESH_TimeSlice500ms();
+void XMESH_INIT();
 
 #endif
 

@@ -34,6 +34,13 @@ typedef enum MsgStatus {
   	RECEIVING,
 } MsgStatus;
 
+typedef union
+{
+	uint8_t u8[2];
+	uint16_t u16;
+	int16_t i16;
+} Union_2B;
+
 const uint8_t MAX_MSG_LENGTH = TX_MSG_LENGTH - 1;
 
 const uint16_t TONE2_FREQ = 0x3065; // 0x2854
@@ -64,6 +71,8 @@ uint8_t hasNewMessage = 0;
 
 uint8_t keyTickCounter = 0;
 
+#ifdef ENABLE_XMESH
+//static const uint8_t HOP_COUNTER_MAX = 7;
 typedef struct
 {
 	uint16_t destination_id;
@@ -98,6 +107,8 @@ MeshBuffer_t xMeshBuffer[XMESH_BUFFER_SIZE];
 uint16_t base_id = 0;
 uint8_t xMeshIndexHead = 0;
 uint8_t xMeshIndexTail = 0;
+uint8_t xMeshSendPacketId = 0;
+#endif
 
 // -----------------------------------------------------
 
@@ -653,14 +664,15 @@ void MSG_SetId(const char name[8],const char id[8])
 	// make sure in POWER_ON_DISPLAY_MODE_MESSAGE mode
 	// 0E90..0E97
 	EEPROM_ReadBuffer(0x0E90, _number, 8);
-	UART_printf("power on display=%x\n", _number[7]);
+//	UART_printf("power on display=%x\n", _number[7]);
 	_number[7] = POWER_ON_DISPLAY_MODE_MESSAGE;
 	EEPROM_WriteBuffer(0x0E90, _number);
 }
 
 bool MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 
-		if ( msgStatus != READY ) return false;
+	if (msgStatus != READY)
+		return false;
 
 	if ( strlen(txMessage) > 0 && (TX_freq_check(gCurrentVfo->pTX->Frequency) == 0) ) {
 
@@ -681,9 +693,9 @@ bool MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 		memcpy(msgFSKBuffer + MAX_RX_MSG_LENGTH, headerMessage, MSG_HEADER_LENGTH);
 
 		uint8_t crc8_value = crc8_compute(msgFSKBuffer + 2, TX_MSG_LENGTH + MSG_HEADER_LENGTH - 1);
-		if(crc8_value!= headerMessage[MSG_HEADER_LENGTH-1])
-			return false;
-
+//		if(crc8_value!= headerMessage[MSG_HEADER_LENGTH-1])
+//			return false;
+		(void) crc8_value;
 
 		msgStatus = SENDING;
 
@@ -788,20 +800,35 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 			#endif
 
 			if (msgFSKBuffer[0] == 'M' && msgFSKBuffer[1] == 'S') {
-				// standard message
-				if (msgFSKBuffer[MAX_RX_MSG_LENGTH] == '0') {
-					snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "< %s", &msgFSKBuffer[2]);
-					#ifdef ENABLE_MESSENGER_UART
-					UART_printf("SMS%s\n", rxMessage[3]);
-					#endif
-				}
-				// external meshtastic message
-				else if (msgFSKBuffer[MAX_RX_MSG_LENGTH] == '1') {
-					snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "x mesh format!");
-				}
+				snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "< %s", &msgFSKBuffer[2]);
+				snprintf((char*) xMeshBuffer[xMeshIndexTail].val.payload, TX_MSG_LENGTH, "%s",
+						&msgFSKBuffer[2]);
+				memcpy(&xMeshBuffer[xMeshIndexTail].val.header, &msgFSKBuffer[MAX_RX_MSG_LENGTH],
+						MSG_HEADER_LENGTH);
+
+				// next MSG_HEADER_LENGTH for header
+				// [0..1] 	: destination ID
+				// [2..3] 	: sender ID
+				// [4] 		: packet ID
+				// [5]		: hop counter
+				// [6]		: (reserved byte)
+				// [7]		: CRC-8
+				UART_printf("header=%d,%d,%d,%d,0x%02X\n",
+						xMeshBuffer[xMeshIndexTail].val.header.destination_id,
+						xMeshBuffer[xMeshIndexTail].val.header.sender_id,
+						xMeshBuffer[xMeshIndexTail].val.header.packet_id,
+						xMeshBuffer[xMeshIndexTail].val.header.hop_counter,
+						xMeshBuffer[xMeshIndexTail].val.header.crc8);
+
+				xMeshIndexTail++;
+				#ifdef ENABLE_MESSENGER_UART
+				UART_printf("SMS%s\n", rxMessage[3]);
+				#endif
+
 			}
 			else {
-				snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "? unknown msg format!");
+//				snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "? unknown msg format!");
+				snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "? %s", &msgFSKBuffer[2]);
 			}
 
 			if ( gScreenToDisplay != DISPLAY_MSG ) {
@@ -930,17 +957,9 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 }
 #endif	//#ifdef ENABLE_XMESH
 
-void MSG_Init() {
-	memset(rxMessage, 0, sizeof(rxMessage));
-	memset(cMessage, 0, sizeof(cMessage));
-	memset(lastcMessage, 0, sizeof(lastcMessage));
-	hasNewMessage = 0;
-	msgStatus = READY;
-	prevKey = 0;
-    prevLetter = 0;
-	cIndex = 0;
-
-	#ifdef ENABLE_XMESH
+#ifdef ENABLE_XMESH
+void XMESH_INIT()
+{
 	for ( int i = 0; i < XMESH_BUFFER_SIZE; ++i ) {
 		memset(&xMeshBuffer[i], 0, sizeof(MeshBuffer_t));
 	}
@@ -957,9 +976,23 @@ void MSG_Init() {
 	else {
 		UART_printf("net=%s:id=%d", _name, base_id);
 	}
+}
 
+void XMESH_TimeSlice500ms()
+{
 
-	#endif
+}
+#endif
+
+void MSG_Init() {
+	memset(rxMessage, 0, sizeof(rxMessage));
+	memset(cMessage, 0, sizeof(cMessage));
+	memset(lastcMessage, 0, sizeof(lastcMessage));
+	hasNewMessage = 0;
+	msgStatus = READY;
+	prevKey = 0;
+    prevLetter = 0;
+	cIndex = 0;
 }
 
 // ---------------------------------------------------------------------------------
@@ -1030,8 +1063,8 @@ void  MSG_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld) {
 			case KEY_F:
 				if (gEeprom.KEY_LOCK && gKeypadLocked > 0) {
 		 			COMMON_KeypadLockToggle();
-//				} else {
-//					MSG_Init();
+				} else {
+					MSG_Init();
 				}
 				break;
 			default:
