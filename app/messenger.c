@@ -72,7 +72,7 @@ uint8_t hasNewMessage = 0;
 uint8_t keyTickCounter = 0;
 
 #ifdef ENABLE_XMESH
-//static const uint8_t HOP_COUNTER_MAX = 7;
+static const uint8_t HOP_COUNTER_MAX = 7;
 typedef struct
 {
 	uint16_t destination_id;
@@ -669,6 +669,35 @@ void MSG_SetId(const char name[8],const char id[8])
 	EEPROM_WriteBuffer(0x0E90, _number);
 }
 
+static void MSG_SendPacket()
+{
+	msgStatus = SENDING;
+
+	RADIO_SetVfoState(VFO_STATE_NORMAL);
+	BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, true);
+	BK4819_DisableDTMF();
+	// mute the mic during TX
+	gMuteMic = true;
+	//RADIO_SetTxParameters();
+	FUNCTION_Select(FUNCTION_TRANSMIT);
+	//SYSTEM_DelayMs(500);
+	//BK4819_PlayRogerNormal(98);
+	SYSTEM_DelayMs(100);
+	//BK4819_ExitTxMute();
+	MSG_FSKSendData();
+	SYSTEM_DelayMs(50);
+	APP_EndTransmission(true);
+	// this must be run after end of TX, otherwise radio will still TX transmit even without RED LED on
+	FUNCTION_Select(FUNCTION_FOREGROUND);
+	RADIO_SetVfoState(VFO_STATE_NORMAL);
+	// disable mic mute after TX
+	gMuteMic = false;
+	BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, false);
+	MSG_EnableRX(true);
+
+	msgStatus = READY;
+}
+
 bool MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 
 	if (msgStatus != READY)
@@ -684,6 +713,17 @@ bool MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 		// [6]		: (reserved byte)
 		// [7]		: CRC-8
 		uint8_t headerMessage[MSG_HEADER_LENGTH];
+		Union_2B u2b;
+		u2b.u16 = 0;
+		headerMessage[0] = u2b.u8[0];
+		headerMessage[1] = u2b.u8[1];
+		u2b.u16 = base_id;
+		headerMessage[2] = u2b.u8[0];
+		headerMessage[3] = u2b.u8[1];
+		headerMessage[4] = xMeshSendPacketId++;
+		headerMessage[5] = HOP_COUNTER_MAX;
+		headerMessage[6] = 0;
+		headerMessage[7] = crc8_compute(msgFSKBuffer + 2, TX_MSG_LENGTH + MSG_HEADER_LENGTH - 1);
 
 		memset(msgFSKBuffer, 0, sizeof(msgFSKBuffer));
 		// first 2 byte sync, message type
@@ -692,43 +732,8 @@ bool MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 		memcpy(msgFSKBuffer + 2, txMessage, TX_MSG_LENGTH);
 		memcpy(msgFSKBuffer + MAX_RX_MSG_LENGTH, headerMessage, MSG_HEADER_LENGTH);
 
-		uint8_t crc8_value = crc8_compute(msgFSKBuffer + 2, TX_MSG_LENGTH + MSG_HEADER_LENGTH - 1);
-//		if(crc8_value!= headerMessage[MSG_HEADER_LENGTH-1])
-//			return false;
-		(void) crc8_value;
+		MSG_SendPacket();
 
-		msgStatus = SENDING;
-
-		RADIO_SetVfoState(VFO_STATE_NORMAL);
-		BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, true);
-
-		BK4819_DisableDTMF();
-		// mute the mic during TX
-		gMuteMic = true;
-
-		//RADIO_SetTxParameters();
-		FUNCTION_Select(FUNCTION_TRANSMIT);
-		//SYSTEM_DelayMs(500);
-		//BK4819_PlayRogerNormal(98);
-		SYSTEM_DelayMs(100);
-
-		//BK4819_ExitTxMute();
-		
-		MSG_FSKSendData();
-
-		SYSTEM_DelayMs(50);
-
-		APP_EndTransmission(true);
-		// this must be run after end of TX, otherwise radio will still TX transmit without even RED LED on
-		FUNCTION_Select(FUNCTION_FOREGROUND);
-		RADIO_SetVfoState(VFO_STATE_NORMAL);
-
-		// disable mic mute after TX
-		gMuteMic = false;
-
-		BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, false);
-
-		MSG_EnableRX(true);
 		if (!bServiceMessage) {
 			moveUP(rxMessage);
 			sprintf(rxMessage[3], "> %s", txMessage);
@@ -739,7 +744,6 @@ bool MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 			prevLetter = 0;
 			memset(cMessage, 0, sizeof(cMessage));
 		}
-		msgStatus = READY;
 
 		return true;
 	} else {
