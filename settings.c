@@ -808,3 +808,16 @@ buf[1] = 0
 ;
 	EEPROM_WriteBuffer(0x1FF0, buf);
 }
+
+void SETTINGS_LoadLogoInfo(char name[8], char id[8])
+{
+	EEPROM_ReadBuffer(0x0EB0, name, 8);
+	EEPROM_ReadBuffer(0x0EC0, id, 8);
+}
+
+void SETTINGS_SaveLogoInfo(const char name[8], const char id[8])
+{
+	EEPROM_WriteBuffer(0x0EB0, name);
+	EEPROM_WriteBuffer(0x0EC0, id);
+}
+

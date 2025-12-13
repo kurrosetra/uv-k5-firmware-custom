@@ -23,11 +23,23 @@
 	#include "driver/uart.h"
 #endif
 
+#if defined(ENABLE_XMESH)
+	#include <stdlib.h>
+	#include "driver/eeprom.h"
+#endif
+
 typedef enum MsgStatus {
 	READY,
   	SENDING,
   	RECEIVING,
 } MsgStatus;
+
+typedef union
+{
+	uint8_t u8[2];
+	uint16_t u16;
+	int16_t i16;
+} Union_2B;
 
 const uint8_t MAX_MSG_LENGTH = TX_MSG_LENGTH - 1;
 
@@ -58,6 +70,52 @@ uint16_t gErrorsDuringMSG;
 uint8_t hasNewMessage = 0;
 
 uint8_t keyTickCounter = 0;
+
+#ifdef ENABLE_XMESH
+#define HOP_COUNTER_MAX  			7
+#define RX_TIME_EXPIRATION_10ms  	12000UL		// 2 minutes
+#define TX_BASE_TIME_TO_SEND_10ms	1000UL		// 10 seconds
+#define XMESH_BUFFER_SIZE			40
+#if XMESH_BUFFER_SIZE >= 100
+#warning "XMESH_BUFFER_SIZE increase RAM needed"
+#elif XMESH_BUFFER_SIZE > 255
+#error "XMESH_BUFFER_SIZE must be in uin8_t boundary"
+#endif
+#define XMESH_INDEX(x, y) 		(((x) + (y)) % sizeof(XMESH_BUFFER_SIZE))
+
+typedef struct
+{
+	uint16_t destination_id;
+	uint16_t sender_id;
+	uint8_t packet_id;
+	uint8_t hop_counter;
+	uint8_t reserved_byte;
+	uint8_t crc8;
+} MeshHeader_t;
+
+typedef struct
+{
+	uint8_t payload[TX_MSG_LENGTH];
+	MeshHeader_t header;
+} MeshContent_t;
+
+typedef struct
+{
+	MeshContent_t info;
+	struct
+	{
+		uint32_t rx_timestamp;	// time when received by FSK; if already above RX_TIME_EXPIRATION, deleted buffer
+		uint8_t rx_counter; 	// how many time received by FSK
+		uint32_t tx_time;		// time to be sent; 0 if has been sent
+	} state;
+} MeshBuffer_t;
+
+MeshBuffer_t xMeshBuffer[XMESH_BUFFER_SIZE];
+uint16_t base_id = 0;
+uint8_t xMeshIndexHead = 0;
+uint8_t xMeshIndexTail = 0;
+uint8_t xMeshSendPacketId = 0;
+#endif
 
 // -----------------------------------------------------
 
@@ -527,6 +585,25 @@ void MSG_EnableRX(const bool enable) {
 
 // -----------------------------------------------------
 
+// Polynomial for CRC-8 (x^8 + x^2 + x + 1)
+#define CRC8_POLY			0x07
+
+// Function to compute CRC-8
+static uint8_t crc8_compute(const uint8_t *data, const size_t len) {
+    uint8_t crc = 0x00; // Initial value
+    for (size_t i = 0; i < len; i++) {
+        crc ^= data[i];
+        for (uint8_t j = 0; j < 8; j++) {
+            if (crc & 0x80) {
+                crc = (crc << 1) ^ CRC8_POLY;
+            } else {
+                crc <<= 1;
+            }
+        }
+    }
+    return crc;
+}
+
 void moveUP(char (*rxMessages)[MAX_RX_MSG_LENGTH + 2]) {
     // Shift existing lines up
     strcpy(rxMessages[0], rxMessages[1]);
@@ -572,77 +649,229 @@ void DTMF_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 	}
 }
 
-void MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
+uint16_t MSG_GetId()
+{
+	return base_id;
+}
 
-	if ( msgStatus != READY ) return;
+void MSG_SetId(const char name[8],const char id[8])
+{
+	uint8_t _number[8];
+
+	memcpy(_number, id, 8);
+
+	base_id = atoi(id);
+	if (base_id == 0) {
+		base_id = 1;
+		snprintf((char*) _number, sizeof(_number), "1");
+	}
+
+	// save to EEPROM
+	SETTINGS_SaveLogoInfo(name, (const char*) _number);
+	// make sure in POWER_ON_DISPLAY_MODE_MESSAGE mode
+	// 0E90..0E97
+	EEPROM_ReadBuffer(0x0E90, _number, 8);
+//	UART_printf("power on display=%x\n", _number[7]);
+	_number[7] = POWER_ON_DISPLAY_MODE_MESSAGE;
+	EEPROM_WriteBuffer(0x0E90, _number);
+}
+
+static void MSG_SendPacket()
+{
+	msgStatus = SENDING;
+
+	RADIO_SetVfoState(VFO_STATE_NORMAL);
+	BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, true);
+	BK4819_DisableDTMF();
+	// mute the mic during TX
+	gMuteMic = true;
+	//RADIO_SetTxParameters();
+	FUNCTION_Select(FUNCTION_TRANSMIT);
+	//SYSTEM_DelayMs(500);
+	//BK4819_PlayRogerNormal(98);
+	SYSTEM_DelayMs(100);
+	//BK4819_ExitTxMute();
+	MSG_FSKSendData();
+	SYSTEM_DelayMs(50);
+	APP_EndTransmission(true);
+	// this must be run after end of TX, otherwise radio will still TX transmit even without RED LED on
+	FUNCTION_Select(FUNCTION_FOREGROUND);
+	RADIO_SetVfoState(VFO_STATE_NORMAL);
+	// disable mic mute after TX
+	gMuteMic = false;
+	BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, false);
+	MSG_EnableRX(true);
+
+	msgStatus = READY;
+}
+
+#ifdef ENABLE_XMESH
+static bool MSG_SendBuffer(const uint8_t index)
+{
+	if (index >= XMESH_BUFFER_SIZE)
+		return false;
+	if (msgStatus != READY)
+		return false;
+
+	if ((TX_freq_check(gCurrentVfo->pTX->Frequency) == 0)
+			&& strlen((const char*) xMeshBuffer[index].info.payload) > 0) {
+
+		memset(msgFSKBuffer, 0, sizeof(msgFSKBuffer));
+		// first 2 byte sync, message type
+		msgFSKBuffer[0] = 'M';
+		msgFSKBuffer[1] = 'S';
+		memcpy(msgFSKBuffer + 2, xMeshBuffer[index].info.payload, TX_MSG_LENGTH);
+		// make sure hop counter is above zero
+		if (xMeshBuffer[index].info.header.hop_counter > 0)
+			// counting down the hop counter in header
+			xMeshBuffer[index].info.header.hop_counter--;
+		memcpy(msgFSKBuffer + MAX_RX_MSG_LENGTH, &xMeshBuffer[index].info.header, MSG_HEADER_LENGTH);
+		//update CRC
+		xMeshBuffer[index].info.header.crc8 =
+				msgFSKBuffer[MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1] = crc8_compute(msgFSKBuffer,
+						MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1);
+
+		MSG_SendPacket();
+
+		moveUP(rxMessage);
+		sprintf(rxMessage[3], "> %s", xMeshBuffer[index].info.payload);
+		UART_printf("SMS%s\n",rxMessage[3]);
+		memset(lastcMessage, 0, sizeof(lastcMessage));
+		memcpy(lastcMessage, xMeshBuffer[index].info.payload, TX_MSG_LENGTH);
+		cIndex = 0;
+		prevKey = 0;
+		prevLetter = 0;
+		memset(cMessage, 0, sizeof(cMessage));
+
+
+		return true;
+	}
+	else {
+		AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL);
+	}
+
+	return false;
+}
+
+
+// all from FSK is save to buffer if message valid and buffer still available
+static bool XMESH_AddBuffer(const char payload[TX_MSG_LENGTH], const MeshHeader_t header)
+{
+	const uint16_t rssi_reg67 = BK4819_ReadRegister(BK4819_REG_67) & 0x1FF;
+	int16_t rssi_dBm = rssi_reg67 / 2 - 160;
+	#ifdef ENABLE_MESSENGER_UART
+	UART_printf("rssi=%ddBm\n", rssi_dBm);
+	#endif
+
+
+	uint8_t next_index = XMESH_INDEX(xMeshIndexTail, 1);
+	// buffer full!!
+	if (next_index == xMeshIndexHead) {
+		UART_printf("[Err]Buffer full\n");
+		return false;
+	}
+	else if (header.sender_id == base_id) {
+		UART_printf("originated from here. msg ignored!\n");
+		/* TODO add checker that previous message has been sent */
+
+		return false;
+	}
+	else {
+		/* TODO CRC check */
+
+		uint8_t buffP = xMeshIndexHead;
+		/* TODO check there's already existed message; destination id & packet id is equal */
+		while (buffP != xMeshIndexTail) {
+			if (xMeshBuffer[buffP].info.header.destination_id == header.destination_id) {
+				if (xMeshBuffer[buffP].info.header.packet_id == header.packet_id) {
+					xMeshBuffer[buffP].state.rx_counter++;
+					// add additional TX wait time
+					if (xMeshBuffer[buffP].state.tx_time > 0) {
+						xMeshBuffer[buffP].state.tx_time += 1000;
+					}
+					UART_printf("MSG existed[%d]!\n", xMeshBuffer[buffP].state.rx_counter);
+					return false;
+				}
+			}
+			buffP = XMESH_INDEX(buffP, 1);
+		}
+
+		// save to xMeshBuffer
+		memcpy(xMeshBuffer[xMeshIndexTail].info.payload, payload, TX_MSG_LENGTH);
+		memcpy(&xMeshBuffer[xMeshIndexTail].info.header, &header, MSG_HEADER_LENGTH);
+
+		xMeshBuffer[xMeshIndexTail].state.rx_counter = 0;
+		xMeshBuffer[xMeshIndexTail].state.rx_timestamp = Systick_Get10msTick();
+		if (xMeshBuffer[xMeshIndexTail].info.header.hop_counter > 0) {
+			/* TODO add random time based on RSSI */
+			xMeshBuffer[xMeshIndexTail].state.tx_time = Systick_Get10msTick()
+					+ TX_BASE_TIME_TO_SEND_10ms + ((base_id % 10) * 10) + (rssi_dBm * 2);
+		}
+		else{
+			// do not send; already the last hop
+			xMeshBuffer[xMeshIndexTail].state.tx_time = 0;
+		}
+
+		xMeshIndexTail = XMESH_INDEX(xMeshIndexTail, 1);
+		return true;
+	}
+
+	return false;
+}
+#endif // #ifdef ENABLE_XMESH
+
+bool MSG_Send(const char txMessage[TX_MSG_LENGTH], const uint16_t destination) {
+
+	if (msgStatus != READY)
+		return false;
 
 	if ( strlen(txMessage) > 0 && (TX_freq_check(gCurrentVfo->pTX->Frequency) == 0) ) {
 
-		msgStatus = SENDING;
-
-		RADIO_SetVfoState(VFO_STATE_NORMAL);
-		BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, true);
+		// next MSG_HEADER_LENGTH for header
+		// [0..1] 	: destination ID
+		// [2..3] 	: sender ID
+		// [4] 		: packet ID
+		// [5]		: hop counter
+		// [6]		: (reserved byte)
+		// [7]		: CRC-8
+		uint8_t headerMessage[MSG_HEADER_LENGTH];
+		Union_2B u2b;
+		u2b.u16 = destination;
+		headerMessage[0] = u2b.u8[0];
+		headerMessage[1] = u2b.u8[1];
+		u2b.u16 = base_id;
+		headerMessage[2] = u2b.u8[0];
+		headerMessage[3] = u2b.u8[1];
+		headerMessage[4] = xMeshSendPacketId++;
+		headerMessage[5] = HOP_COUNTER_MAX;
+		headerMessage[6] = headerMessage[7] = 0;
 
 		memset(msgFSKBuffer, 0, sizeof(msgFSKBuffer));
-
-		// ? ToDo
-		// first 20 byte sync, msg type and ID
+		// first 2 byte sync, message type
 		msgFSKBuffer[0] = 'M';
 		msgFSKBuffer[1] = 'S';
-
-		// next 20 for msg
 		memcpy(msgFSKBuffer + 2, txMessage, TX_MSG_LENGTH);
+		memcpy(msgFSKBuffer + MAX_RX_MSG_LENGTH, headerMessage, MSG_HEADER_LENGTH);
+		headerMessage[7] = crc8_compute(msgFSKBuffer, MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1);
+		msgFSKBuffer[MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1] = headerMessage[7];
 
-		// CRC ? ToDo
+		MSG_SendPacket();
 
-		msgFSKBuffer[MAX_RX_MSG_LENGTH - 1] = '\0';
-		msgFSKBuffer[MAX_RX_MSG_LENGTH + 0] = 'I';
-		msgFSKBuffer[MAX_RX_MSG_LENGTH + 1] = 'D';
-		msgFSKBuffer[MAX_RX_MSG_LENGTH + 2] = '0';
-		msgFSKBuffer[(MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH) - 1] = '#';
+		moveUP(rxMessage);
+		sprintf(rxMessage[3], "> %s", txMessage);
+		memset(lastcMessage, 0, sizeof(lastcMessage));
+		memcpy(lastcMessage, txMessage, TX_MSG_LENGTH);
+		cIndex = 0;
+		prevKey = 0;
+		prevLetter = 0;
+		memset(cMessage, 0, sizeof(cMessage));
 
-		BK4819_DisableDTMF();
-		// mute the mic during TX
-		gMuteMic = true;
-
-		//RADIO_SetTxParameters();
-		FUNCTION_Select(FUNCTION_TRANSMIT);
-		//SYSTEM_DelayMs(500);
-		//BK4819_PlayRogerNormal(98);
-		SYSTEM_DelayMs(100);
-
-		//BK4819_ExitTxMute();
-		
-		MSG_FSKSendData();
-
-		SYSTEM_DelayMs(50);
-
-		APP_EndTransmission(true);
-		// this must be run after end of TX, otherwise radio will still TX transmit without even RED LED on
-		FUNCTION_Select(FUNCTION_FOREGROUND);
-		RADIO_SetVfoState(VFO_STATE_NORMAL);
-
-		// disable mic mute after TX
-		gMuteMic = false;
-
-		BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, false);
-
-		MSG_EnableRX(true);
-		if (!bServiceMessage) {
-			moveUP(rxMessage);
-			sprintf(rxMessage[3], "> %s", txMessage);
-			memset(lastcMessage, 0, sizeof(lastcMessage));
-			memcpy(lastcMessage, txMessage, TX_MSG_LENGTH);
-			cIndex = 0;
-			prevKey = 0;
-			prevLetter = 0;
-			memset(cMessage, 0, sizeof(cMessage));
-		}
-		msgStatus = READY;
-
+		return true;
 	} else {
 		AUDIO_PlayBeep(BEEP_500HZ_60MS_DOUBLE_BEEP_OPTIONAL);
 	}
+
+	return false;
 }
 
 uint8_t validate_char( uint8_t rchar ) {
@@ -652,6 +881,123 @@ uint8_t validate_char( uint8_t rchar ) {
 	return 32;
 }
 
+#ifdef ENABLE_XMESH
+void MSG_StorePacket(const uint16_t interrupt_bits) {
+	const bool rx_sync             = (interrupt_bits & BK4819_REG_02_FSK_RX_SYNC) ? true : false;
+	const bool rx_fifo_almost_full = (interrupt_bits & BK4819_REG_02_FSK_FIFO_ALMOST_FULL) ? true : false;
+	const bool rx_finished         = (interrupt_bits & BK4819_REG_02_FSK_RX_FINISHED) ? true : false;
+
+	if (rx_sync) {
+		gFSKWriteIndex = 0;
+		memset(msgFSKBuffer, 0, sizeof(msgFSKBuffer));
+		msgStatus = RECEIVING;
+	}
+
+	if (rx_fifo_almost_full && msgStatus == RECEIVING) {
+
+		const uint16_t count = BK4819_ReadRegister(BK4819_REG_5E) & (7u << 0);  // almost full threshold
+		for (uint16_t i = 0; i < count; i++) {
+			const uint16_t word = BK4819_ReadRegister(BK4819_REG_5F);
+			if (gFSKWriteIndex < sizeof(msgFSKBuffer))
+				msgFSKBuffer[gFSKWriteIndex++] = (word >> 0) & 0xFF;
+			if (gFSKWriteIndex < sizeof(msgFSKBuffer))
+				msgFSKBuffer[gFSKWriteIndex++] = (word >> 8) & 0xFF;
+		}
+
+		SYSTEM_DelayMs(10);
+	}
+
+	if (rx_finished) {
+
+		const uint16_t fsk_reg59 = BK4819_ReadRegister(BK4819_REG_59) & ~((1u << 15) | (1u << 14) | (1u << 12) | (1u << 11));
+
+		BK4819_WriteRegister(BK4819_REG_59, (1u << 15) | (1u << 14) | fsk_reg59);
+		BK4819_WriteRegister(BK4819_REG_59, (1u << 12) | fsk_reg59);
+		msgStatus = READY;
+
+		if (gFSKWriteIndex > 0) {
+
+
+//			const uint16_t rssi_reg67 = BK4819_ReadRegister(BK4819_REG_67) & 0x1FF;
+//			int16_t rssi_dBm = rssi_reg67 / 2 - 160;
+//			#ifdef ENABLE_MESSENGER_UART
+//			UART_printf("rssi=%ddBm\n", rssi_dBm);
+//			#endif
+
+			uint8_t crc_val = crc8_compute(msgFSKBuffer, MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1);
+
+			if (msgFSKBuffer[0] == 'M' && msgFSKBuffer[1] == 'S') {
+
+				char _payload[TX_MSG_LENGTH];
+				MeshHeader_t _header;
+
+				memset(_payload, 0, TX_MSG_LENGTH);
+				snprintf(_payload, TX_MSG_LENGTH, "%s", &msgFSKBuffer[2]);
+				memcpy(&_header, &msgFSKBuffer[MAX_RX_MSG_LENGTH], MSG_HEADER_LENGTH);
+
+				if (XMESH_AddBuffer(_payload, _header)) {
+					// next MSG_HEADER_LENGTH for header
+					// [0..1] 	: destination ID
+					// [2..3] 	: sender ID
+					// [4] 		: packet ID
+					// [5]		: hop counter
+					// [6]		: (reserved byte)
+					// [7]		: CRC-8
+					UART_printf("header<%d,%d,%d,%d,%d\n",
+							_header.destination_id,
+							_header.sender_id,
+							_header.packet_id,
+							_header.hop_counter,
+							_header.crc8);
+
+					if (crc_val == _header.crc8)
+						UART_printf("CRC<VALID\n");
+					else
+						UART_printf("CRC<MISMATCH\n");
+
+					moveUP(rxMessage);
+					snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "< %s", &msgFSKBuffer[2]);
+
+					#ifdef ENABLE_MESSENGER_UART
+					UART_printf("SMS%s\n", rxMessage[3]);
+					#endif
+				}
+//				else {
+//					#ifdef ENABLE_MESSENGER_UART
+//					UART_printf("SMS%s\n", rxMessage[3]);
+//					#endif
+//				}
+			}
+			else {
+				moveUP(rxMessage);
+
+//				snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "? unknown msg format!");
+				snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "? %s", &msgFSKBuffer[2]);
+			}
+
+			if ( gScreenToDisplay != DISPLAY_MSG ) {
+				hasNewMessage = 1;
+				gUpdateStatus = true;
+				gUpdateDisplay = true;
+				#ifdef ENABLE_MESSENGER_NOTIFICATION
+				gPlayMSGRing = true;
+				#endif
+			}
+			else {
+				gUpdateDisplay = true;
+			}
+		}
+
+		gFSKWriteIndex = 0;
+		#ifdef ENABLE_MESSENGER_DELIVERY_NOTIFICATION
+		// Transmit a message to the sender that we have received the message (Unless it's a service message)
+		if (msgFSKBuffer[0] == 'M' && msgFSKBuffer[1] == 'S' && msgFSKBuffer[2] != 0x1b) {
+			MSG_Send("\x1b\x1b\x1bRCVD", true);
+		}
+		#endif
+	}
+}
+#else	//#ifdef ENABLE_XMESH
 void MSG_StorePacket(const uint16_t interrupt_bits) {
 
 	//const uint16_t rx_sync_flags   = BK4819_ReadRegister(BK4819_REG_0B);
@@ -724,6 +1070,10 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 					#ifdef ENABLE_MESSENGER_UART
 					UART_printf("SMS%s\n", rxMessage[3]);
 					#endif
+
+					const uint16_t rssi_reg67 = BK4819_ReadRegister(BK4819_REG_67) & 0x1FF;
+					int16_t rssi_dBm = rssi_reg67 / 2 - 160;
+					UART_printf("rssi=%ddBm\n", rssi_dBm);
 				}			
 
 				if ( gScreenToDisplay != DISPLAY_MSG ) {
@@ -749,6 +1099,64 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 		#endif
 	}
 }
+#endif	//#ifdef ENABLE_XMESH
+
+#ifdef ENABLE_XMESH
+
+void XMESH_INIT()
+{
+	for ( int i = 0; i < XMESH_BUFFER_SIZE; ++i ) {
+		memset(&xMeshBuffer[i], 0, sizeof(MeshBuffer_t));
+	}
+
+	char _name[8], _number[8];
+	SETTINGS_LoadLogoInfo(_name, _number);
+	base_id = atoi(_number);
+	if (gEeprom.POWER_ON_DISPLAY_MODE == POWER_ON_DISPLAY_MODE_VOLTAGE || base_id == 0) {
+		base_id = 1;
+		snprintf(_name, sizeof(_name), "net01");
+		snprintf(_number, sizeof(_number), "%d", base_id);
+		MSG_SetId(_name, _number);
+	}
+	else {
+		UART_printf("net=%s:id=%d", _name, base_id);
+	}
+}
+
+void XMESH_TimeSlice500ms()
+{
+	static bool rx_state = false;
+
+	bool _rx_now = FUNCTION_IsRx();
+	if (rx_state != _rx_now) {
+		rx_state = _rx_now;
+		UART_printf("[%ums]rx_st=%d\n", Systick_Get10msTick(), rx_state);
+	}
+
+	// check buffer expiration time
+	if (xMeshIndexHead != xMeshIndexTail) {
+		if (Systick_Get10msTick()>xMeshBuffer[xMeshIndexHead].state.rx_timestamp+RX_TIME_EXPIRATION_10ms) {
+			xMeshIndexHead = XMESH_INDEX(xMeshIndexHead, 1);
+		}
+	}
+
+	// check buffer time to send
+	uint8_t indexHead = xMeshIndexHead;
+	while (indexHead != xMeshIndexTail) {
+		if (xMeshBuffer[indexHead].state.tx_time > 0) {
+			if (Systick_Get10msTick() >= xMeshBuffer[indexHead].state.tx_time) {
+				/* TODO send current buffer */
+				if(MSG_SendBuffer(indexHead)){
+					xMeshBuffer[indexHead].state.tx_time = 0;
+				}
+				break;
+			}
+		}
+		indexHead = XMESH_INDEX(indexHead, 1);
+	}
+}
+
+#endif
 
 void MSG_Init() {
 	memset(rxMessage, 0, sizeof(rxMessage));
@@ -875,7 +1283,7 @@ void  MSG_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld) {
 			case KEY_MENU:
 			case KEY_PTT:
 				// Send message
-				MSG_Send(cMessage, false);
+				MSG_Send(cMessage, 0);
 				break;
 			case KEY_EXIT:
 				gRequestDisplayScreen = DISPLAY_MAIN;

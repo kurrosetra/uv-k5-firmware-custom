@@ -23,27 +23,19 @@
 	#include "app/fm.h"
 #endif
 #if defined(ENABLE_MESSENGER) || defined(ENABLE_MESSENGER_UART)
+	#include <strings.h>
+	#include <stdlib.h>
 	#include "app/messenger.h"
   	#include "external/printf/printf.h"
 #endif
 #include "app/uart.h"
-#include "board.h"
 #include "bsp/dp32g030/dma.h"
-#include "bsp/dp32g030/gpio.h"
-#include "driver/aes.h"
-#include "driver/backlight.h"
-#include "driver/bk4819.h"
-#include "driver/crc.h"
-#include "driver/eeprom.h"
-#include "driver/gpio.h"
 #include "driver/uart.h"
-#include "functions.h"
 #include "misc.h"
 #include "settings.h"
-#include "version.h"
 #include "ui/ui.h"		//change frequency
-/* TODO TEST */
 #include "common.h"		//change channel
+#include "driver/system.h"
 
 #if defined(ENABLE_OVERLAY)
 	#include "sram-overlay.h"
@@ -55,484 +47,9 @@
 #endif
 
 #define DMA_INDEX(x, y) (((x) + (y)) % sizeof(UART_DMA_Buffer))
-
-typedef struct {
-	uint16_t ID;
-	uint16_t Size;
-} Header_t;
-
-typedef struct {
-	uint8_t  Padding[2];
-	uint16_t ID;
-} Footer_t;
-
-typedef struct {
-	Header_t Header;
-	uint32_t Timestamp;
-} CMD_0514_t;
-
-typedef struct {
-	Header_t Header;
-	struct {
-		char     Version[16];
-		bool     bHasCustomAesKey;
-		bool     bIsInLockScreen;
-		uint8_t  Padding[2];
-		uint32_t Challenge[4];
-	} Data;
-} REPLY_0514_t;
-
-typedef struct {
-	Header_t Header;
-	uint16_t Offset;
-	uint8_t  Size;
-	uint8_t  Padding;
-	uint32_t Timestamp;
-} CMD_051B_t;
-
-typedef struct {
-	Header_t Header;
-	struct {
-		uint16_t Offset;
-		uint8_t  Size;
-		uint8_t  Padding;
-		uint8_t  Data[128];
-	} Data;
-} REPLY_051B_t;
-
-typedef struct {
-	Header_t Header;
-	uint16_t Offset;
-	uint8_t  Size;
-	bool     bAllowPassword;
-	uint32_t Timestamp;
-	uint8_t  Data[0];
-} CMD_051D_t;
-
-typedef struct {
-	Header_t Header;
-	struct {
-		uint16_t Offset;
-	} Data;
-} REPLY_051D_t;
-
-typedef struct {
-	Header_t Header;
-	struct {
-		uint16_t RSSI;
-		uint8_t  ExNoiseIndicator;
-		uint8_t  GlitchIndicator;
-	} Data;
-} REPLY_0527_t;
-
-typedef struct {
-	Header_t Header;
-	struct {
-		uint16_t Voltage;
-		uint16_t Current;
-	} Data;
-} REPLY_0529_t;
-
-typedef struct {
-	Header_t Header;
-	uint32_t Response[4];
-} CMD_052D_t;
-
-typedef struct {
-	Header_t Header;
-	struct {
-		bool bIsLocked;
-		uint8_t Padding[3];
-	} Data;
-} REPLY_052D_t;
-
-typedef struct {
-	Header_t Header;
-	uint32_t Timestamp;
-} CMD_052F_t;
-
-
-#ifdef ENABLE_SCREEN_DUMP
-typedef struct {
-	Header_t Header;
-	uint8_t Key;
-	uint8_t Padding;
-	uint32_t Timestamp;
-} CMD_0A01_t; // simulate key press
-#endif
-
-static const uint8_t Obfuscation[16] =
-{
-	0x16, 0x6C, 0x14, 0xE6, 0x2E, 0x91, 0x0D, 0x40, 0x21, 0x35, 0xD5, 0x40, 0x13, 0x03, 0xE9, 0x80
-};
-
-static union
-{
-	uint8_t Buffer[256];
-	struct
-	{
-		Header_t Header;
-		uint8_t Data[252];
-	};
-} UART_Command;
-
-static uint32_t Timestamp;
-static uint16_t gUART_WriteIndex;
-static bool     bIsEncrypted = true;
-
-static void SendReply(void *pReply, uint16_t Size)
-{
-	Header_t Header;
-	Footer_t Footer;
-
-	if (bIsEncrypted)
-	{
-		uint8_t     *pBytes = (uint8_t *)pReply;
-		unsigned int i;
-		for (i = 0; i < Size; i++)
-			pBytes[i] ^= Obfuscation[i % 16];
-	}
-
-	Header.ID = 0xCDAB;
-	Header.Size = Size;
-	UART_Send(&Header, sizeof(Header));
-	UART_Send(pReply, Size);
-
-	if (bIsEncrypted)
-	{
-		Footer.Padding[0] = Obfuscation[(Size + 0) % 16] ^ 0xFF;
-		Footer.Padding[1] = Obfuscation[(Size + 1) % 16] ^ 0xFF;
-	}
-	else
-	{
-		Footer.Padding[0] = 0xFF;
-		Footer.Padding[1] = 0xFF;
-	}
-	Footer.ID = 0xBADC;
-
-	UART_Send(&Footer, sizeof(Footer));
-}
-
-static void SendVersion(void)
-{
-	REPLY_0514_t Reply;
-
-	Reply.Header.ID = 0x0515;
-	Reply.Header.Size = sizeof(Reply.Data);
-	strcpy(Reply.Data.Version, "1o11");
-	Reply.Data.bHasCustomAesKey = bHasCustomAesKey;
-	Reply.Data.bIsInLockScreen = bIsInLockScreen;
-	Reply.Data.Challenge[0] = gChallenge[0];
-	Reply.Data.Challenge[1] = gChallenge[1];
-	Reply.Data.Challenge[2] = gChallenge[2];
-	Reply.Data.Challenge[3] = gChallenge[3];
-
-	SendReply(&Reply, sizeof(Reply));
-}
-
-static bool IsBadChallenge(const uint32_t *pKey, const uint32_t *pIn, const uint32_t *pResponse)
-{
-	unsigned int i;
-	uint32_t     IV[4];
-
-	IV[0] = 0;
-	IV[1] = 0;
-	IV[2] = 0;
-	IV[3] = 0;
-
-	AES_Encrypt(pKey, IV, pIn, IV, true);
-
-	for (i = 0; i < 4; i++)
-		if (IV[i] != pResponse[i])
-			return true;
-
-	return false;
-}
-
-// session init, sends back version info and state
-// timestamp is a session id really
-static void CMD_0514(const uint8_t *pBuffer)
-{
-	const CMD_0514_t *pCmd = (const CMD_0514_t *)pBuffer;
-
-	Timestamp = pCmd->Timestamp;
-
-	#ifdef ENABLE_FMRADIO
-		gFmRadioCountdown_500ms = fm_radio_countdown_500ms;
-	#endif
-
-	gSerialConfigCountDown_500ms = 12; // 6 sec
-	
-	// turn the LCD backlight off
-	BACKLIGHT_TurnOff();
-
-	SendVersion();
-}
-
-// read eeprom
-static void CMD_051B(const uint8_t *pBuffer)
-{
-	const CMD_051B_t *pCmd = (const CMD_051B_t *)pBuffer;
-	REPLY_051B_t      Reply;
-	bool              bLocked = false;
-
-	if (pCmd->Timestamp != Timestamp)
-		return;
-
-	gSerialConfigCountDown_500ms = 12; // 6 sec
-
-	#ifdef ENABLE_FMRADIO
-		gFmRadioCountdown_500ms = fm_radio_countdown_500ms;
-	#endif
-
-	memset(&Reply, 0, sizeof(Reply));
-	Reply.Header.ID   = 0x051C;
-	Reply.Header.Size = pCmd->Size + 4;
-	Reply.Data.Offset = pCmd->Offset;
-	Reply.Data.Size   = pCmd->Size;
-
-	if (bHasCustomAesKey)
-		bLocked = gIsLocked;
-
-	if (!bLocked)
-		EEPROM_ReadBuffer(pCmd->Offset, Reply.Data.Data, pCmd->Size);
-
-	SendReply(&Reply, pCmd->Size + 8);
-}
-
-// write eeprom
-static void CMD_051D(const uint8_t *pBuffer)
-{
-	const CMD_051D_t *pCmd = (const CMD_051D_t *)pBuffer;
-	REPLY_051D_t Reply;
-	bool bReloadEeprom;
-	bool bIsLocked;
-
-	if (pCmd->Timestamp != Timestamp)
-		return;
-
-	gSerialConfigCountDown_500ms = 12; // 6 sec
-	
-	bReloadEeprom = false;
-
-	#ifdef ENABLE_FMRADIO
-		gFmRadioCountdown_500ms = fm_radio_countdown_500ms;
-	#endif
-
-	Reply.Header.ID   = 0x051E;
-	Reply.Header.Size = sizeof(Reply.Data);
-	Reply.Data.Offset = pCmd->Offset;
-
-	bIsLocked = bHasCustomAesKey ? gIsLocked : bHasCustomAesKey;
-
-	if (!bIsLocked)
-	{
-		unsigned int i;
-		for (i = 0; i < (pCmd->Size / 8); i++)
-		{
-			const uint16_t Offset = pCmd->Offset + (i * 8U);
-
-			if (Offset >= 0x0F30 && Offset < 0x0F40)
-				if (!gIsLocked)
-					bReloadEeprom = true;
-
-			if ((Offset < 0x0E98 || Offset >= 0x0EA0) || !bIsInLockScreen || pCmd->bAllowPassword)
-				EEPROM_WriteBuffer(Offset, &pCmd->Data[i * 8U]);
-		}
-
-		if (bReloadEeprom)
-			SETTINGS_InitEEPROM();
-	}
-
-	SendReply(&Reply, sizeof(Reply));
-}
-
-// read RSSI
-static void CMD_0527(void)
-{
-	REPLY_0527_t Reply;
-
-	Reply.Header.ID             = 0x0528;
-	Reply.Header.Size           = sizeof(Reply.Data);
-	Reply.Data.RSSI             = BK4819_ReadRegister(BK4819_REG_67) & 0x01FF;
-	Reply.Data.ExNoiseIndicator = BK4819_ReadRegister(BK4819_REG_65) & 0x007F;
-	Reply.Data.GlitchIndicator  = BK4819_ReadRegister(BK4819_REG_63);
-
-	SendReply(&Reply, sizeof(Reply));
-}
-
-// read ADC
-static void CMD_0529(void)
-{
-	REPLY_0529_t Reply;
-
-	Reply.Header.ID   = 0x52A;
-	Reply.Header.Size = sizeof(Reply.Data);
-
-	// Original doesn't actually send current!
-	BOARD_ADC_GetBatteryInfo(&Reply.Data.Voltage, &Reply.Data.Current);
-
-	SendReply(&Reply, sizeof(Reply));
-}
-
-static void CMD_052D(const uint8_t *pBuffer)
-{
-	const CMD_052D_t *pCmd = (const CMD_052D_t *)pBuffer;
-	REPLY_052D_t      Reply;
-	bool              bIsLocked;
-
-	#ifdef ENABLE_FMRADIO
-		gFmRadioCountdown_500ms = fm_radio_countdown_500ms;
-	#endif
-	Reply.Header.ID   = 0x052E;
-	Reply.Header.Size = sizeof(Reply.Data);
-
-	bIsLocked = bHasCustomAesKey;
-
-	if (!bIsLocked)
-		bIsLocked = IsBadChallenge(gCustomAesKey, gChallenge, pCmd->Response);
-
-	if (!bIsLocked)
-	{
-		bIsLocked = IsBadChallenge(gDefaultAesKey, gChallenge, pCmd->Response);
-		if (bIsLocked)
-			gTryCount++;
-	}
-
-	if (gTryCount < 3)
-	{
-		if (!bIsLocked)
-			gTryCount = 0;
-	}
-	else
-	{
-		gTryCount = 3;
-		bIsLocked = true;
-	}
-	
-	gIsLocked            = bIsLocked;
-	Reply.Data.bIsLocked = bIsLocked;
-
-	SendReply(&Reply, sizeof(Reply));
-}
-
-// session init, sends back version info and state
-// timestamp is a session id really
-// this command also disables dual watch, crossband, 
-// DTMF side tones, freq reverse, PTT ID, DTMF decoding, frequency offset
-// exits power save, sets main VFO to upper,
-static void CMD_052F(const uint8_t *pBuffer)
-{
-	const CMD_052F_t *pCmd = (const CMD_052F_t *)pBuffer;
-
-	gEeprom.DUAL_WATCH                               = DUAL_WATCH_OFF;
-	gEeprom.CROSS_BAND_RX_TX                         = CROSS_BAND_OFF;
-	gEeprom.RX_VFO                                   = 0;
-	gEeprom.DTMF_SIDE_TONE                           = false;
-	gEeprom.VfoInfo[0].FrequencyReverse              = false;
-	gEeprom.VfoInfo[0].pRX                           = &gEeprom.VfoInfo[0].freq_config_RX;
-	gEeprom.VfoInfo[0].pTX                           = &gEeprom.VfoInfo[0].freq_config_TX;
-	gEeprom.VfoInfo[0].TX_OFFSET_FREQUENCY_DIRECTION = TX_OFFSET_FREQUENCY_DIRECTION_OFF;
-	gEeprom.VfoInfo[0].DTMF_PTT_ID_TX_MODE           = PTT_ID_OFF;
-#ifdef ENABLE_DTMF_CALLING
-	gEeprom.VfoInfo[0].DTMF_DECODING_ENABLE          = false;
-#endif
-
-	#ifdef ENABLE_NOAA
-		gIsNoaaMode = false;
-	#endif
-
-	if (gCurrentFunction == FUNCTION_POWER_SAVE)
-		FUNCTION_Select(FUNCTION_FOREGROUND);
-
-	gSerialConfigCountDown_500ms = 12; // 6 sec
-
-	Timestamp = pCmd->Timestamp;
-
-	// turn the LCD backlight off
-	BACKLIGHT_TurnOff();
-
-	SendVersion();
-}
-
-#ifdef ENABLE_SCREEN_DUMP
-static void CMD_0A03() // dumps the LCD screen memory to the PC. Not used in the Dock, is just for debug purposes
-{
-	const uint16_t screenDumpIdByte = 0xEFAB;
-	UART_Send(&screenDumpIdByte, 2);
-	UART_Send(gStatusLine, 128);
-	UART_Send(gFrameBuffer, 896);
-}
-
-static void CMD_0A01(const uint8_t *pBuffer) // smulate a key press
-{
-	const CMD_0A01_t *pCmd = (const CMD_0A01_t *)pBuffer;
-	const uint8_t key = pCmd->Key & 0x1f;
-	const bool click = pCmd->Key & 32;
-	if(key != KEY_INVALID)
-	{
-		gSimulateKey = key;
-		gDebounceDefeat = 0;
-		if(key == KEY_PTT)
-			gPttCounter = 40;
-	}
-	gSimulateHold = click ? KEY_INVALID : key;
-}
-#endif
-
-#ifdef ENABLE_UART_RW_BK_REGS
-static void CMD_0601_ReadBK4819Reg(const uint8_t *pBuffer)
-{
-	typedef struct  __attribute__((__packed__)) {
-		Header_t header;
-		uint8_t reg;
-	} CMD_0601_t;
-
-	CMD_0601_t *cmd = (CMD_0601_t*) pBuffer;
-
-	struct __attribute__((__packed__)) {
-		Header_t header;
-		struct __attribute__((__packed__)) {
-			uint8_t reg;
-			uint16_t value;
-		} data;
-	} reply;
-
-	reply.header.ID = 0x0601;
-	reply.header.Size = sizeof(reply.data);
-	reply.data.reg = cmd->reg;
-	reply.data.value = BK4819_ReadRegister(cmd->reg);
-	SendReply(&reply, sizeof(reply));
-}
-
-static void CMD_0602_WriteBK4819Reg(const uint8_t *pBuffer)
-{
-	typedef struct __attribute__((__packed__)) {
-		Header_t header;
-		uint8_t reg;
-		uint16_t value;
-	} CMD_0602_t;
-
-	CMD_0602_t *cmd = (CMD_0602_t*) pBuffer;
-	BK4819_WriteRegister(cmd->reg, cmd->value);
-}
-#endif
-
-#if defined(ENABLE_MESSENGER) || defined(ENABLE_MESSENGER_UART)
-void remove(char cstring[], char letter) {
-    for(int i = 0; cstring[i] != '\0'; i++) {
-        if(cstring[i] == letter) cstring[i] = '\0';
-    } 
-}
-bool findchar(uint8_t start, char letter) {
-    for(int i = start; UART_DMA_Buffer[i] != '\0'; i++) {
-        if(UART_DMA_Buffer[i] == letter) return true;
-    } 
-	return false;
-}
-
-
-#endif
+#define COMMAND_MAX_BUFSIZE				(TX_MSG_LENGTH + 16)
+const uint16_t RX_DMA_LENGTH = sizeof(UART_DMA_Buffer);
+char gCmdMessage[COMMAND_MAX_BUFSIZE];
 
 static bool UART_Change_Frequency_Command(const char *message)
 {
@@ -602,270 +119,137 @@ static bool UART_Change_Frequency_Command(const char *message)
 	return false;
 }
 
+static void _id_parse(const char *str, char *name, char *id)
+{
+	const char *start = str;
+	const char *p = str;
+
+	while (*p) {
+		if (*p == ',') {
+			snprintf(name, 8, "%.*s", (int) (p - start), start);
+//			UART_printf("name=%.*s=%s\n", (int) (p - start), start, name);
+			start = p + 1;	// move past comma
+		}
+		p++;
+	}
+	// last word
+	if(p>start){
+		snprintf(id, 8, "%.*s", (int) (p - start), start);
+//		UART_printf("id=%.*s=%s\n", (int) (p - start), start, id);
+	}
+}
+
 bool UART_IsCommandAvailable(void)
 {
-	static uint8_t txtStart = 0;
-	static bool newTxtMsg = false;
-	static bool newDtmfMsg = false;
-	static bool newFrequencyMsg = false;
-	bool validMsg = false;
+	static uint16_t uart_rx_index = 0;
+	uint16_t DmaIndex = DMA_CH0->ST & 0xFFFU;
+	static uint8_t waitDelay10msCounter = 0;
+	char _c[2] = { 0, 0 };
 
-	uint16_t Index;
-	uint16_t TailIndex;
-	uint16_t Size;
-	uint16_t CRC;
-	uint16_t CommandLength;
-	uint16_t DmaLength = DMA_CH0->ST & 0xFFFU;
-
-	while (1)
-	{
-		if (gUART_WriteIndex == DmaLength)
+	while (1) {
+		if (uart_rx_index == DmaIndex)
 			return false;
 
-#if defined(ENABLE_MESSENGER) && defined(ENABLE_MESSENGER_UART)
+		waitDelay10msCounter++;
 
-		if ( UART_DMA_Buffer[gUART_WriteIndex] == 'S' && UART_DMA_Buffer[gUART_WriteIndex + 1] == 'M' && UART_DMA_Buffer[ gUART_WriteIndex + 2] == 'S' && UART_DMA_Buffer[gUART_WriteIndex + 3] == ':') {
-			txtStart = gUART_WriteIndex;
-			newTxtMsg = true;
-			//UART_printf("1:%s\r\n", &UART_DMA_Buffer[txtStart]);
-		}
+		if (waitDelay10msCounter > 2) {
+			waitDelay10msCounter = 0;
 
-		/* TODO DTMF Send handler here */
-		if ( UART_DMA_Buffer[gUART_WriteIndex] == 'D' && UART_DMA_Buffer[gUART_WriteIndex + 1] == 'T' && UART_DMA_Buffer[ gUART_WriteIndex + 2] == 'M' && UART_DMA_Buffer[gUART_WriteIndex + 3] == 'F' && UART_DMA_Buffer[gUART_WriteIndex + 4] == ':') {
-			txtStart = gUART_WriteIndex;
-			newDtmfMsg = true;
-//			UART_printf("D:%s\r\n", &UART_DMA_Buffer[txtStart]);
-		}
+//			UART_printf("index=%d,%d,%d\n", DmaIndex, uart_rx_index,
+//					(DmaIndex > uart_rx_index) ?
+//							(int)(DmaIndex - uart_rx_index) :
+//							(int)(DmaIndex + sizeof(UART_DMA_Buffer) - uart_rx_index));
+			memset(gCmdMessage, 0, sizeof(gCmdMessage));
+			while (uart_rx_index != DmaIndex) {
+				if ((UART_DMA_Buffer[uart_rx_index] == '\r')
+						|| (UART_DMA_Buffer[uart_rx_index] == '\n')
+						|| (UART_DMA_Buffer[uart_rx_index] == '\0')) {
 
-		/* TODO Change Frequency handler here */
-		if (UART_DMA_Buffer[gUART_WriteIndex] == 'F'
-				&& UART_DMA_Buffer[gUART_WriteIndex + 1] == 'R'
-				&& UART_DMA_Buffer[gUART_WriteIndex + 2] == 'E'
-				&& UART_DMA_Buffer[gUART_WriteIndex + 3] == 'Q'
-				&& UART_DMA_Buffer[gUART_WriteIndex + 4] == ':') {
-
-				txtStart = gUART_WriteIndex;
-				newFrequencyMsg = true;
-//				UART_printf("F:%s\r\n", &UART_DMA_Buffer[txtStart]);
-		}
-
-
-		if(findchar(txtStart, '\n')){
-			if(newTxtMsg){
-				char txMessage[TX_MSG_LENGTH + 4];
-				memset(txMessage, 0, sizeof(txMessage));
-				snprintf(txMessage, (TX_MSG_LENGTH + 4), "%s", &UART_DMA_Buffer[txtStart + 4]);
-
-				remove(txMessage, '\n');
-				remove(txMessage, '\r');
-
-				if (strlen(txMessage) > 0) {
-					MSG_Send(txMessage, false);
-					UART_printf("SMS>%s\r\n", txMessage);
-					gUpdateDisplay = true;
+					uart_rx_index = DmaIndex;
+					return true;
 				}
-				validMsg = true;
-			}
-			else if(newDtmfMsg){
-				char dtMessage[TX_MSG_LENGTH + 5];
-				memset(dtMessage, 0, sizeof(dtMessage));
-				snprintf(dtMessage, (TX_MSG_LENGTH + 5), "%s", &UART_DMA_Buffer[txtStart + 5]);
-
-				remove(dtMessage, '\n');
-				remove(dtMessage, '\r');
-
-				if (strlen(dtMessage) > 0) {
-					DTMF_Send(dtMessage, false);
-					UART_printf("\nDTMF>%s\n", dtMessage);
-					gUpdateDisplay = true;
-				}
-				validMsg = true;
-			}
-			else if(newFrequencyMsg){
-				char frMessage[TX_MSG_LENGTH + 5];
-				memset(frMessage, 0, sizeof(frMessage));
-				snprintf(frMessage, (TX_MSG_LENGTH + 5), "%s", &UART_DMA_Buffer[txtStart + 5]);
-
-				remove(frMessage, '\n');
-				remove(frMessage, '\r');
-
-				if (strlen(frMessage) > 0) {
-					if (gEeprom.TX_VFO & 1) {
-						COMMON_SwitchVFOs();
-						RADIO_ConfigureChannel(gEeprom.TX_VFO, VFO_CONFIGURE);
-						RADIO_SelectVfos();
-						RADIO_SetupRegisters(true);
-						gVFO_RSSI_bar_level[0] = 0;
-						gVFO_RSSI_bar_level[1] = 0;
-						gUpdateDisplay = 1;
-					}
-
-					validMsg = UART_Change_Frequency_Command(frMessage);
-					if (validMsg) {
-						UART_printf("\nFREQ>%d\n",
-								gTxVfo->freq_config_TX.Frequency);
-					}
-				}
-			}
-
-			if(validMsg){
-				newTxtMsg = newDtmfMsg = newFrequencyMsg = false;
-				txtStart = 0;
-				memset(UART_DMA_Buffer, 0, sizeof(UART_DMA_Buffer));
-				gUART_WriteIndex = 0;
-				return false;
+				_c[0] = UART_DMA_Buffer[uart_rx_index];
+				strcat(gCmdMessage, _c);
+				uart_rx_index = DMA_INDEX(uart_rx_index, 1);
 			}
 		}
-		
-		while (gUART_WriteIndex != DmaLength && UART_DMA_Buffer[gUART_WriteIndex] != 0xABU && UART_DMA_Buffer[gUART_WriteIndex] != 'S')
-			gUART_WriteIndex = DMA_INDEX(gUART_WriteIndex, 1);
-#else  
-		while (gUART_WriteIndex != DmaLength && UART_DMA_Buffer[gUART_WriteIndex] != 0xABU)
-			gUART_WriteIndex = DMA_INDEX(gUART_WriteIndex, 1);
-#endif  
 
-		if (gUART_WriteIndex == DmaLength)
-			return false;
-
-		if (gUART_WriteIndex < DmaLength)
-			CommandLength = DmaLength - gUART_WriteIndex;
-		else
-			CommandLength = (DmaLength + sizeof(UART_DMA_Buffer)) - gUART_WriteIndex;
-
-		if (CommandLength < 8)
-			return 0;
-
-		if (UART_DMA_Buffer[DMA_INDEX(gUART_WriteIndex, 1)] == 0xCD)
-			break;
-
-		gUART_WriteIndex = DMA_INDEX(gUART_WriteIndex, 1);
+		break;
 	}
-
-	Index = DMA_INDEX(gUART_WriteIndex, 2);
-	Size  = (UART_DMA_Buffer[DMA_INDEX(Index, 1)] << 8) | UART_DMA_Buffer[Index];
-
-	if ((Size + 8u) > sizeof(UART_DMA_Buffer))
-	{
-		gUART_WriteIndex = DmaLength;
-		return false;
-	}
-
-	if (CommandLength < (Size + 8))
-		return false;
-
-	Index     = DMA_INDEX(Index, 2);
-	TailIndex = DMA_INDEX(Index, Size + 2);
-
-	if (UART_DMA_Buffer[TailIndex] != 0xDC || UART_DMA_Buffer[DMA_INDEX(TailIndex, 1)] != 0xBA)
-	{
-		gUART_WriteIndex = DmaLength;
-		return false;
-	}
-
-	if (TailIndex < Index)
-	{
-		const uint16_t ChunkSize = sizeof(UART_DMA_Buffer) - Index;
-		memcpy(UART_Command.Buffer, UART_DMA_Buffer + Index, ChunkSize);
-		memcpy(UART_Command.Buffer + ChunkSize, UART_DMA_Buffer, TailIndex);
-	}
-	else
-		memcpy(UART_Command.Buffer, UART_DMA_Buffer + Index, TailIndex - Index);
-
-	TailIndex = DMA_INDEX(TailIndex, 2);
-	if (TailIndex < gUART_WriteIndex)
-	{
-		memset(UART_DMA_Buffer + gUART_WriteIndex, 0, sizeof(UART_DMA_Buffer) - gUART_WriteIndex);
-		memset(UART_DMA_Buffer, 0, TailIndex);
-	}
-	else
-		memset(UART_DMA_Buffer + gUART_WriteIndex, 0, TailIndex - gUART_WriteIndex);
-
-	gUART_WriteIndex = TailIndex;
-
-	if (UART_Command.Header.ID == 0x0514)
-		bIsEncrypted = false;
-
-	if (UART_Command.Header.ID == 0x6902)
-		bIsEncrypted = true;
-
-	if (bIsEncrypted)
-	{
-		unsigned int i;
-		for (i = 0; i < (Size + 2u); i++)
-			UART_Command.Buffer[i] ^= Obfuscation[i % 16];
-	}
-	
-	CRC = UART_Command.Buffer[Size] | (UART_Command.Buffer[Size + 1] << 8);
-
-	return (CRC_Calculate(UART_Command.Buffer, Size) != CRC) ? false : true;
+	return false;
 }
 
 void UART_HandleCommand(void)
 {
-	switch (UART_Command.Header.ID)
-	{
-		case 0x0514:
-			CMD_0514(UART_Command.Buffer);
-			break;
-	
-		case 0x051B:
-			CMD_051B(UART_Command.Buffer);
-			break;
-	
-		case 0x051D:
-			CMD_051D(UART_Command.Buffer);
-			break;
-	
-		case 0x051F:	// Not implementing non-authentic command
-			break;
-	
-		case 0x0521:	// Not implementing non-authentic command
-			break;
-	
-		case 0x0527:
-			CMD_0527();
-			break;
-	
-		case 0x0529:
-			CMD_0529();
-			break;
-	
-		case 0x052D:
-			CMD_052D(UART_Command.Buffer);
-			break;
-	
-		case 0x052F:
-			CMD_052F(UART_Command.Buffer);
-			break;
-	
-		case 0x05DD: // reset
-			#if defined(ENABLE_OVERLAY)
-				overlay_FLASH_RebootToBootloader();
-			#else
-				NVIC_SystemReset();
-			#endif
-			break;
-			
-#ifdef ENABLE_UART_RW_BK_REGS
-		case 0x0601:
-			CMD_0601_ReadBK4819Reg(UART_Command.Buffer);
-			break;
-		
-		case 0x0602:
-			CMD_0602_WriteBK4819Reg(UART_Command.Buffer);
-			break;
-#endif
+	char *tmp;
+	UART_printf("cmd[%dB]=%s\n", strlen(gCmdMessage), gCmdMessage);
 
-#ifdef ENABLE_SCREEN_DUMP
+	if (strncmp(gCmdMessage, "SMS:", 4) == 0) {
+		tmp = gCmdMessage + 4;
+//		UART_printf("s[%dB]:%s\n", strlen(tmp), tmp);
 
-		case 0x0A01: // simulate key press
-			CMD_0A01(UART_Command.Buffer);
-			break;			
-		case 0x0A03: // screen dump
-			CMD_0A03();
-			break;
-#endif
+		char *payload = tmp;
+		char dest_id[8] = { 0 };
+		uint8_t comma_pos = 0;
+		uint16_t dID=0;
+		bool comma_found = false;
+		char c[2] = {0,0};
 
+		for ( comma_pos = 0; comma_pos < strlen(tmp); comma_pos++ ) {
+			c[0] = *(tmp + comma_pos);
+			if (c[0] == ',') {
+				comma_found = true;
+//				UART_printf("destID=%d\n", dest_id);
+				break;
+			}
+			strcat(dest_id, c);
+		}
 
+		if (comma_found) {
+//			UART_printf("offset=%d\n", comma_pos + 1);
+			payload = tmp + comma_pos + 1;
+			dID = atoi(dest_id);
+		}
+
+//		UART_printf("%s=%d,%s\n", tmp, dID, payload);
+
+		if (strlen(payload) > 0) {
+			if (!MSG_Send(payload, dID)) {
+				UART_printf("in RX state!\n");
+			}
+			UART_printf("SMS>%s\r\n", payload);
+			gUpdateDisplay = true;
+		}
+	}
+	else if (strncmp(gCmdMessage, "FREQ:", 5) == 0) {
+		tmp = gCmdMessage + 5;
+		if (strlen(tmp) > 0) {
+			if (UART_Change_Frequency_Command(tmp)) {
+				UART_printf("\nFREQ>%d\n", gTxVfo->freq_config_TX.Frequency);
+			}
+		}
+	}
+	else if (strncmp(gCmdMessage, "DTMF:", 5) == 0) {
+		tmp = gCmdMessage + 5;
+		if (strlen(tmp) > 0) {
+			DTMF_Send(tmp, false);
+			UART_printf("\nDTMF>%s\n", tmp);
+			gUpdateDisplay = true;
+		}
+	}
+	else if (strncmp(gCmdMessage, "SID:", 4) == 0) {
+		tmp = gCmdMessage + 4;
+		char _name[8], _number[8];
+
+		if (strlen(tmp) > 0) {
+			_id_parse(tmp, _name, _number);
+			UART_printf("SID:%s->%s,%s\n", tmp, _name, _number);
+			MSG_SetId(_name, _number);
+			UART_printf("\nID>%d\n", MSG_GetId());
+		}
+	}
+	else if (strncmp(gCmdMessage, "GID?", 4) == 0) {
+		UART_printf("\nID>%d\n", MSG_GetId());
 	}
 }
+

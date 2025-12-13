@@ -1132,9 +1132,9 @@ void APP_TimeSlice10ms(void)
 
 #ifdef ENABLE_UART
 	if (UART_IsCommandAvailable()) {
-		__disable_irq();
+//		__disable_irq();
 		UART_HandleCommand();
-		__enable_irq();
+//		__enable_irq();
 	}
 #endif
 
@@ -1536,6 +1536,10 @@ void APP_TimeSlice500ms(void)
 		gDTMF_IsTx     = false;
 		gUpdateDisplay = true;
 	}
+#endif
+
+#ifdef ENABLE_XMESH
+	XMESH_TimeSlice500ms();
 #endif
 }
 
