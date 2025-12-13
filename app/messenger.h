@@ -19,11 +19,8 @@ enum {
 	TX_MSG_LENGTH = 30,
 	MSG_HEADER_LENGTH = 8,
 	MAX_RX_MSG_LENGTH = TX_MSG_LENGTH + 2,
-	MAX_RX_MSG_DISP_LENGTH = TX_MSG_LENGTH + 2,
 	XMESH_STATE_LENGTH = 10
 };
-//const uint8_t TX_MSG_LENGTH = 30;
-//const uint8_t MAX_RX_MSG_LENGTH = TX_MSG_LENGTH + 2;
 
 extern KeyboardType keyboardType;
 extern uint16_t gErrorsDuringMSG;
@@ -36,7 +33,7 @@ void MSG_EnableRX(const bool enable);
 void MSG_StorePacket(const uint16_t interrupt_bits);
 void MSG_Init();
 void MSG_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld);
-bool MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage);
+bool MSG_Send(const char txMessage[TX_MSG_LENGTH], const uint16_t destination);
 
 void DTMF_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage);
 

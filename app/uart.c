@@ -23,6 +23,8 @@
 	#include "app/fm.h"
 #endif
 #if defined(ENABLE_MESSENGER) || defined(ENABLE_MESSENGER_UART)
+	#include <strings.h>
+	#include <stdlib.h>
 	#include "app/messenger.h"
   	#include "external/printf/printf.h"
 #endif
@@ -153,10 +155,10 @@ bool UART_IsCommandAvailable(void)
 		if (waitDelay10msCounter > 2) {
 			waitDelay10msCounter = 0;
 
-			UART_printf("index=%d,%d,%d\n", DmaIndex, uart_rx_index,
-					(DmaIndex > uart_rx_index) ?
-							(int)(DmaIndex - uart_rx_index) :
-							(int)(DmaIndex + sizeof(UART_DMA_Buffer) - uart_rx_index));
+//			UART_printf("index=%d,%d,%d\n", DmaIndex, uart_rx_index,
+//					(DmaIndex > uart_rx_index) ?
+//							(int)(DmaIndex - uart_rx_index) :
+//							(int)(DmaIndex + sizeof(UART_DMA_Buffer) - uart_rx_index));
 			memset(gCmdMessage, 0, sizeof(gCmdMessage));
 			while (uart_rx_index != DmaIndex) {
 				if ((UART_DMA_Buffer[uart_rx_index] == '\r')
@@ -184,12 +186,38 @@ void UART_HandleCommand(void)
 
 	if (strncmp(gCmdMessage, "SMS:", 4) == 0) {
 		tmp = gCmdMessage + 4;
-		UART_printf("s[%dB]:%s\n", strlen(tmp), tmp);
-		if (strlen(tmp) > 0) {
-			if (!MSG_Send(tmp, false)) {
+//		UART_printf("s[%dB]:%s\n", strlen(tmp), tmp);
+
+		char *payload = tmp;
+		char dest_id[8] = { 0 };
+		uint8_t comma_pos = 0;
+		uint16_t dID=0;
+		bool comma_found = false;
+		char c[2] = {0,0};
+
+		for ( comma_pos = 0; comma_pos < strlen(tmp); comma_pos++ ) {
+			c[0] = *(tmp + comma_pos);
+			if (c[0] == ',') {
+				comma_found = true;
+//				UART_printf("destID=%d\n", dest_id);
+				break;
+			}
+			strcat(dest_id, c);
+		}
+
+		if (comma_found) {
+//			UART_printf("offset=%d\n", comma_pos + 1);
+			payload = tmp + comma_pos + 1;
+			dID = atoi(dest_id);
+		}
+
+//		UART_printf("%s=%d,%s\n", tmp, dID, payload);
+
+		if (strlen(payload) > 0) {
+			if (!MSG_Send(payload, dID)) {
 				UART_printf("in RX state!\n");
 			}
-			UART_printf("SMS>%s\r\n", tmp);
+			UART_printf("SMS>%s\r\n", payload);
 			gUpdateDisplay = true;
 		}
 	}

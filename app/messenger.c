@@ -56,7 +56,7 @@ unsigned char numberOfNumsAssignedToKey[9] = { 1, 1, 1, 1, 1, 1, 1, 1, 1 };
 
 char cMessage[TX_MSG_LENGTH];
 char lastcMessage[TX_MSG_LENGTH];
-char rxMessage[4][MAX_RX_MSG_DISP_LENGTH + 2];
+char rxMessage[4][MAX_RX_MSG_LENGTH + 2];
 unsigned char cIndex = 0;
 unsigned char prevKey = 0, prevLetter = 0;
 KeyboardType keyboardType = UPPERCASE;
@@ -97,7 +97,7 @@ typedef struct
 	uint8_t recv_counter;
 } MeshBuffer_t;
 
-#define XMESH_BUFFER_SIZE		50
+#define XMESH_BUFFER_SIZE		10
 #if XMESH_BUFFER_SIZE >= 100
 #warning "XMESH_BUFFER_SIZE increase RAM needed"
 #elif XMESH_BUFFER_SIZE > 255
@@ -698,7 +698,7 @@ static void MSG_SendPacket()
 	msgStatus = READY;
 }
 
-bool MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
+bool MSG_Send(const char txMessage[TX_MSG_LENGTH], const uint16_t destination) {
 
 	if (msgStatus != READY)
 		return false;
@@ -714,7 +714,7 @@ bool MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 		// [7]		: CRC-8
 		uint8_t headerMessage[MSG_HEADER_LENGTH];
 		Union_2B u2b;
-		u2b.u16 = 0;
+		u2b.u16 = destination;
 		headerMessage[0] = u2b.u8[0];
 		headerMessage[1] = u2b.u8[1];
 		u2b.u16 = base_id;
@@ -722,8 +722,7 @@ bool MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 		headerMessage[3] = u2b.u8[1];
 		headerMessage[4] = xMeshSendPacketId++;
 		headerMessage[5] = HOP_COUNTER_MAX;
-		headerMessage[6] = 0;
-		headerMessage[7] = crc8_compute(msgFSKBuffer + 2, TX_MSG_LENGTH + MSG_HEADER_LENGTH - 1);
+		headerMessage[6] = headerMessage[7] = 0;
 
 		memset(msgFSKBuffer, 0, sizeof(msgFSKBuffer));
 		// first 2 byte sync, message type
@@ -731,19 +730,19 @@ bool MSG_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 		msgFSKBuffer[1] = 'S';
 		memcpy(msgFSKBuffer + 2, txMessage, TX_MSG_LENGTH);
 		memcpy(msgFSKBuffer + MAX_RX_MSG_LENGTH, headerMessage, MSG_HEADER_LENGTH);
+		headerMessage[7] = crc8_compute(msgFSKBuffer, MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1);
+		msgFSKBuffer[MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1] = headerMessage[7];
 
 		MSG_SendPacket();
 
-		if (!bServiceMessage) {
-			moveUP(rxMessage);
-			sprintf(rxMessage[3], "> %s", txMessage);
-			memset(lastcMessage, 0, sizeof(lastcMessage));
-			memcpy(lastcMessage, txMessage, TX_MSG_LENGTH);
-			cIndex = 0;
-			prevKey = 0;
-			prevLetter = 0;
-			memset(cMessage, 0, sizeof(cMessage));
-		}
+		moveUP(rxMessage);
+		sprintf(rxMessage[3], "> %s", txMessage);
+		memset(lastcMessage, 0, sizeof(lastcMessage));
+		memcpy(lastcMessage, txMessage, TX_MSG_LENGTH);
+		cIndex = 0;
+		prevKey = 0;
+		prevLetter = 0;
+		memset(cMessage, 0, sizeof(cMessage));
 
 		return true;
 	} else {
@@ -795,6 +794,7 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 		msgStatus = READY;
 
 		if (gFSKWriteIndex > 0) {
+
 			moveUP(rxMessage);
 
 			const uint16_t rssi_reg67 = BK4819_ReadRegister(BK4819_REG_67) & 0x1FF;
@@ -802,6 +802,8 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 			#ifdef ENABLE_MESSENGER_UART
 			UART_printf("rssi=%ddBm\n", rssi_dBm);
 			#endif
+
+			uint8_t crc_val = crc8_compute(msgFSKBuffer, MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1);
 
 			if (msgFSKBuffer[0] == 'M' && msgFSKBuffer[1] == 'S') {
 				snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "< %s", &msgFSKBuffer[2]);
@@ -823,6 +825,11 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 						xMeshBuffer[xMeshIndexTail].val.header.packet_id,
 						xMeshBuffer[xMeshIndexTail].val.header.hop_counter,
 						xMeshBuffer[xMeshIndexTail].val.header.crc8);
+
+				if(crc_val==xMeshBuffer[xMeshIndexTail].val.header.crc8)
+					UART_printf("CRC_VALID\n");
+				else
+					UART_printf("CRC_MISMATCH\n");
 
 				xMeshIndexTail++;
 				#ifdef ENABLE_MESSENGER_UART
@@ -1113,7 +1120,7 @@ void  MSG_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld) {
 			case KEY_MENU:
 			case KEY_PTT:
 				// Send message
-				MSG_Send(cMessage, false);
+				MSG_Send(cMessage, 0);
 				break;
 			case KEY_EXIT:
 				gRequestDisplayScreen = DISPLAY_MAIN;
