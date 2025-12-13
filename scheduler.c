@@ -46,6 +46,13 @@ static volatile uint32_t gGlobalSysTickCounter;
 
 void SystickHandler(void);
 
+#ifdef ENABLE_XMESH
+uint32_t Systick_Get10msTick()
+{
+	return gGlobalSysTickCounter;
+}
+#endif
+
 // we come here every 10ms
 void SystickHandler(void)
 {

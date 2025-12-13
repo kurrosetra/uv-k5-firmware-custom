@@ -41,6 +41,7 @@ uint16_t MSG_GetId();
 void MSG_SetId(const char name[8],const char id[8]);
 void XMESH_TimeSlice500ms();
 void XMESH_INIT();
+//bool XMESH_AddBuffer(const char payload[TX_MSG_LENGTH], const uint8_t header[MSG_HEADER_LENGTH]);
 
 #endif
 

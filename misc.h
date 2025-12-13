@@ -335,5 +335,8 @@ inline bool SerialConfigInProgress() { return gSerialConfigCountDown_500ms != 0;
 
 sLevelAttributes GetSLevelAttributes (const int16_t rssi, const uint32_t frequency);
 int Rssi2DBm(const uint16_t rssi);
+#ifdef ENABLE_XMESH
+uint32_t Systick_Get10msTick();
+#endif
 
 #endif
