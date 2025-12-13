@@ -248,8 +248,21 @@ void UART_HandleCommand(void)
 			UART_printf("\nID>%d\n", MSG_GetId());
 		}
 	}
-	else if (strncmp(gCmdMessage, "GID?", 4) == 0) {
+	else if (strncmp(gCmdMessage, "--id", 4) == 0) {
 		UART_printf("\nID>%d\n", MSG_GetId());
+	}
+	else if(strncmp(gCmdMessage,"--buflen",8)==0){
+		UART_printf("\nBuffer free,time: %d,%ums\n", XMESH_GetBufferAvailable(),
+				Systick_Get10msTick() * 10);
+	}
+	else if (strncmp(gCmdMessage, "--help", 6) == 0) {
+		UART_printf("available command:\n");
+		UART_printf("SMS:123,payload\t\tsend to point 123 with \"payload\" data\n");
+		UART_printf("DTMF:12345\t\tsend dtmf tone of \"12345\"\n");
+		UART_printf("FREQ:145000\t\tset freq to 145000kHz\n");
+		UART_printf("SID:net1,234\t\tSet to net name=net1 and id=123\n");
+		UART_printf("--id\t\tGet ID of this device\n");
+		UART_printf("--buflen\t\tGet meshtastic buffer available\n");
 	}
 }
 

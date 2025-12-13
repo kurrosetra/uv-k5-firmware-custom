@@ -1103,6 +1103,18 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 
 #ifdef ENABLE_XMESH
 
+uint8_t XMESH_GetBufferAvailable()
+{
+	uint8_t len = 0, h = xMeshIndexHead;
+
+	while (h != xMeshIndexTail) {
+		len++;
+		h = XMESH_INDEX(h, 1);
+	}
+
+	return (XMESH_BUFFER_SIZE - len);
+}
+
 void XMESH_INIT()
 {
 	for ( int i = 0; i < XMESH_BUFFER_SIZE; ++i ) {
