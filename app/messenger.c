@@ -72,10 +72,10 @@ uint8_t hasNewMessage = 0;
 uint8_t keyTickCounter = 0;
 
 #ifdef ENABLE_XMESH
-#define HOP_COUNTER_MAX  		7
-#define RX_TIME_EXPIRATION  	600000UL	// 10 minutes
-#define TX_BASE_TIME_TO_SEND	5000UL		// 5 seconds
-#define XMESH_BUFFER_SIZE		10
+#define HOP_COUNTER_MAX  			7
+#define RX_TIME_EXPIRATION_10ms  	12000UL		// 2 minutes
+#define TX_BASE_TIME_TO_SEND_10ms	1000UL		// 10 seconds
+#define XMESH_BUFFER_SIZE			40
 #if XMESH_BUFFER_SIZE >= 100
 #warning "XMESH_BUFFER_SIZE increase RAM needed"
 #elif XMESH_BUFFER_SIZE > 255
@@ -705,6 +705,7 @@ static void MSG_SendPacket()
 	msgStatus = READY;
 }
 
+#ifdef ENABLE_XMESH
 static bool MSG_SendBuffer(const uint8_t index)
 {
 	if (index >= XMESH_BUFFER_SIZE)
@@ -734,12 +735,14 @@ static bool MSG_SendBuffer(const uint8_t index)
 
 		moveUP(rxMessage);
 		sprintf(rxMessage[3], "> %s", xMeshBuffer[index].info.payload);
+		UART_printf("SMS%s\n",rxMessage[3]);
 		memset(lastcMessage, 0, sizeof(lastcMessage));
 		memcpy(lastcMessage, xMeshBuffer[index].info.payload, TX_MSG_LENGTH);
 		cIndex = 0;
 		prevKey = 0;
 		prevLetter = 0;
 		memset(cMessage, 0, sizeof(cMessage));
+
 
 		return true;
 	}
@@ -749,6 +752,73 @@ static bool MSG_SendBuffer(const uint8_t index)
 
 	return false;
 }
+
+
+// all from FSK is save to buffer if message valid and buffer still available
+static bool XMESH_AddBuffer(const char payload[TX_MSG_LENGTH], const MeshHeader_t header)
+{
+	const uint16_t rssi_reg67 = BK4819_ReadRegister(BK4819_REG_67) & 0x1FF;
+	int16_t rssi_dBm = rssi_reg67 / 2 - 160;
+	#ifdef ENABLE_MESSENGER_UART
+	UART_printf("rssi=%ddBm\n", rssi_dBm);
+	#endif
+
+
+	uint8_t next_index = XMESH_INDEX(xMeshIndexTail, 1);
+	// buffer full!!
+	if (next_index == xMeshIndexHead) {
+		UART_printf("[Err]Buffer full\n");
+		return false;
+	}
+	else if (header.sender_id == base_id) {
+		UART_printf("originated from here. msg ignored!\n");
+		/* TODO add checker that previous message has been sent */
+
+		return false;
+	}
+	else {
+		/* TODO CRC check */
+
+		uint8_t buffP = xMeshIndexHead;
+		/* TODO check there's already existed message; destination id & packet id is equal */
+		while (buffP != xMeshIndexTail) {
+			if (xMeshBuffer[buffP].info.header.destination_id == header.destination_id) {
+				if (xMeshBuffer[buffP].info.header.packet_id == header.packet_id) {
+					xMeshBuffer[buffP].state.rx_counter++;
+					// add additional TX wait time
+					if (xMeshBuffer[buffP].state.tx_time > 0) {
+						xMeshBuffer[buffP].state.tx_time += 1000;
+					}
+					UART_printf("MSG existed[%d]!\n", xMeshBuffer[buffP].state.rx_counter);
+					return false;
+				}
+			}
+			buffP = XMESH_INDEX(buffP, 1);
+		}
+
+		// save to xMeshBuffer
+		memcpy(xMeshBuffer[xMeshIndexTail].info.payload, payload, TX_MSG_LENGTH);
+		memcpy(&xMeshBuffer[xMeshIndexTail].info.header, &header, MSG_HEADER_LENGTH);
+
+		xMeshBuffer[xMeshIndexTail].state.rx_counter = 0;
+		xMeshBuffer[xMeshIndexTail].state.rx_timestamp = Systick_Get10msTick();
+		if (xMeshBuffer[xMeshIndexTail].info.header.hop_counter > 0) {
+			/* TODO add random time based on RSSI */
+			xMeshBuffer[xMeshIndexTail].state.tx_time = Systick_Get10msTick()
+					+ TX_BASE_TIME_TO_SEND_10ms + ((base_id % 10) * 10) + (rssi_dBm * 2);
+		}
+		else{
+			// do not send; already the last hop
+			xMeshBuffer[xMeshIndexTail].state.tx_time = 0;
+		}
+
+		xMeshIndexTail = XMESH_INDEX(xMeshIndexTail, 1);
+		return true;
+	}
+
+	return false;
+}
+#endif // #ifdef ENABLE_XMESH
 
 bool MSG_Send(const char txMessage[TX_MSG_LENGTH], const uint16_t destination) {
 
@@ -847,49 +917,60 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 
 		if (gFSKWriteIndex > 0) {
 
-			moveUP(rxMessage);
 
-			const uint16_t rssi_reg67 = BK4819_ReadRegister(BK4819_REG_67) & 0x1FF;
-			int16_t rssi_dBm = rssi_reg67 / 2 - 160;
-			#ifdef ENABLE_MESSENGER_UART
-			UART_printf("rssi=%ddBm\n", rssi_dBm);
-			#endif
+//			const uint16_t rssi_reg67 = BK4819_ReadRegister(BK4819_REG_67) & 0x1FF;
+//			int16_t rssi_dBm = rssi_reg67 / 2 - 160;
+//			#ifdef ENABLE_MESSENGER_UART
+//			UART_printf("rssi=%ddBm\n", rssi_dBm);
+//			#endif
 
 			uint8_t crc_val = crc8_compute(msgFSKBuffer, MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1);
 
 			if (msgFSKBuffer[0] == 'M' && msgFSKBuffer[1] == 'S') {
-				snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "< %s", &msgFSKBuffer[2]);
-				snprintf((char*) xMeshBuffer[xMeshIndexTail].info.payload, TX_MSG_LENGTH, "%s",
-						&msgFSKBuffer[2]);
-				memcpy(&xMeshBuffer[xMeshIndexTail].info.header, &msgFSKBuffer[MAX_RX_MSG_LENGTH],
-						MSG_HEADER_LENGTH);
 
-				// next MSG_HEADER_LENGTH for header
-				// [0..1] 	: destination ID
-				// [2..3] 	: sender ID
-				// [4] 		: packet ID
-				// [5]		: hop counter
-				// [6]		: (reserved byte)
-				// [7]		: CRC-8
-				UART_printf("header<%d,%d,%d,%d,%d\n",
-						xMeshBuffer[xMeshIndexTail].info.header.destination_id,
-						xMeshBuffer[xMeshIndexTail].info.header.sender_id,
-						xMeshBuffer[xMeshIndexTail].info.header.packet_id,
-						xMeshBuffer[xMeshIndexTail].info.header.hop_counter,
-						xMeshBuffer[xMeshIndexTail].info.header.crc8);
+				char _payload[TX_MSG_LENGTH];
+				MeshHeader_t _header;
 
-				if(crc_val==xMeshBuffer[xMeshIndexTail].info.header.crc8)
-					UART_printf("CRC<VALID\n");
-				else
-					UART_printf("CRC<MISMATCH\n");
+				memset(_payload, 0, TX_MSG_LENGTH);
+				snprintf(_payload, TX_MSG_LENGTH, "%s", &msgFSKBuffer[2]);
+				memcpy(&_header, &msgFSKBuffer[MAX_RX_MSG_LENGTH], MSG_HEADER_LENGTH);
 
-				xMeshIndexTail++;
-				#ifdef ENABLE_MESSENGER_UART
-				UART_printf("SMS%s\n", rxMessage[3]);
-				#endif
+				if (XMESH_AddBuffer(_payload, _header)) {
+					// next MSG_HEADER_LENGTH for header
+					// [0..1] 	: destination ID
+					// [2..3] 	: sender ID
+					// [4] 		: packet ID
+					// [5]		: hop counter
+					// [6]		: (reserved byte)
+					// [7]		: CRC-8
+					UART_printf("header<%d,%d,%d,%d,%d\n",
+							_header.destination_id,
+							_header.sender_id,
+							_header.packet_id,
+							_header.hop_counter,
+							_header.crc8);
 
+					if (crc_val == _header.crc8)
+						UART_printf("CRC<VALID\n");
+					else
+						UART_printf("CRC<MISMATCH\n");
+
+					moveUP(rxMessage);
+					snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "< %s", &msgFSKBuffer[2]);
+
+					#ifdef ENABLE_MESSENGER_UART
+					UART_printf("SMS%s\n", rxMessage[3]);
+					#endif
+				}
+//				else {
+//					#ifdef ENABLE_MESSENGER_UART
+//					UART_printf("SMS%s\n", rxMessage[3]);
+//					#endif
+//				}
 			}
 			else {
+				moveUP(rxMessage);
+
 //				snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "? unknown msg format!");
 				snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "? %s", &msgFSKBuffer[2]);
 			}
@@ -1022,63 +1103,6 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 
 #ifdef ENABLE_XMESH
 
-// all from FSK is save to buffer if message valid and buffer still available
-bool XMESH_AddBuffer(const char payload[TX_MSG_LENGTH], const MeshHeader_t header)
-{
-	uint8_t next_index = XMESH_INDEX(xMeshIndexTail, 1);
-	// buffer full!!
-	if (next_index == xMeshIndexHead) {
-		UART_printf("[Err]Buffer full\n");
-		return false;
-	}
-	else if (header.sender_id == base_id) {
-		UART_printf("originated from here. msg ignored!\n");
-		/* TODO add checker that previous message has been sent */
-
-		return false;
-	}
-	else {
-		/* TODO CRC check */
-
-		uint8_t buffP = xMeshIndexHead;
-		/* TODO check there's already existed message; destination id & packet id is equal */
-		while (buffP != xMeshIndexTail) {
-			if (xMeshBuffer[buffP].info.header.destination_id == header.destination_id) {
-				if (xMeshBuffer[buffP].info.header.packet_id == header.packet_id) {
-					xMeshBuffer[buffP].state.rx_counter++;
-					// add additional TX wait time
-					if (xMeshBuffer[buffP].state.tx_time > 0) {
-						xMeshBuffer[buffP].state.tx_time += 1000;
-					}
-					UART_printf("MSG existed[%d]!", xMeshBuffer[buffP].state.rx_counter);
-					return false;
-				}
-			}
-			buffP = XMESH_INDEX(buffP, 1);
-		}
-
-		// save to xMeshBuffer
-		memcpy(xMeshBuffer[xMeshIndexTail].info.payload, payload, TX_MSG_LENGTH);
-		memcpy(&xMeshBuffer[xMeshIndexTail].info.header, &header, MSG_HEADER_LENGTH);
-
-		xMeshBuffer[xMeshIndexTail].state.rx_counter = 0;
-		xMeshBuffer[xMeshIndexTail].state.rx_timestamp = Systick_Get10msTick();
-		if (xMeshBuffer[xMeshIndexTail].info.header.hop_counter > 0) {
-			/* TODO add random time based on RSSI */
-			xMeshBuffer[xMeshIndexTail].state.tx_time = Systick_Get10msTick() + TX_BASE_TIME_TO_SEND;
-		}
-		else{
-			// do not send; already the last hop
-			xMeshBuffer[xMeshIndexTail].state.tx_time = 0;
-		}
-
-		xMeshIndexTail = XMESH_INDEX(xMeshIndexTail, 1);
-		return true;
-	}
-
-	return false;
-}
-
 void XMESH_INIT()
 {
 	for ( int i = 0; i < XMESH_BUFFER_SIZE; ++i ) {
@@ -1111,7 +1135,7 @@ void XMESH_TimeSlice500ms()
 
 	// check buffer expiration time
 	if (xMeshIndexHead != xMeshIndexTail) {
-		if (Systick_Get10msTick()>xMeshBuffer[xMeshIndexHead].state.rx_timestamp+RX_TIME_EXPIRATION) {
+		if (Systick_Get10msTick()>xMeshBuffer[xMeshIndexHead].state.rx_timestamp+RX_TIME_EXPIRATION_10ms) {
 			xMeshIndexHead = XMESH_INDEX(xMeshIndexHead, 1);
 		}
 	}
