@@ -1149,8 +1149,8 @@ void XMESH_TimeSlice500ms()
 //	}
 
 	// check buffer expiration time
-	if (xMeshIndexHead != xMeshIndexTail) {
-		if (Systick_Get10msTick()>xMeshBuffer[xMeshIndexHead].state.rx_timestamp+RX_TIME_EXPIRATION_10ms) {
+	if (xMeshIndexTail != xMeshIndexHead) {
+		if (Systick_Get10msTick()>xMeshBuffer[xMeshIndexTail].state.rx_timestamp+RX_TIME_EXPIRATION_10ms) {
 			xMeshIndexTail = XMESH_INDEX(xMeshIndexTail, 1);
 		}
 	}
