@@ -713,6 +713,10 @@ static bool MSG_SendBuffer(const uint8_t index)
 		return false;
 	if (msgStatus != READY)
 		return false;
+	if (FUNCTION_IsRx()) {
+		UART_printf("[Err]Rx Blocked!\n");
+		return false;
+	}
 
 	if ((TX_freq_check(gCurrentVfo->pTX->Frequency) == 0)
 			&& strlen((const char*) xMeshBuffer[index].info.payload) > 0) {
