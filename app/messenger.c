@@ -56,7 +56,7 @@ unsigned char numberOfNumsAssignedToKey[9] = { 1, 1, 1, 1, 1, 1, 1, 1, 1 };
 
 char cMessage[TX_MSG_LENGTH];
 char lastcMessage[TX_MSG_LENGTH];
-char rxMessage[4][MAX_RX_MSG_LENGTH + 2];
+char rxMessage[4][MAX_DISP_MSG_LENGTH];;
 unsigned char cIndex = 0;
 unsigned char prevKey = 0, prevLetter = 0;
 KeyboardType keyboardType = UPPERCASE;
@@ -75,7 +75,7 @@ uint8_t keyTickCounter = 0;
 #define HOP_COUNTER_MAX  			7
 #define RX_TIME_EXPIRATION_10ms  	60000UL		// 10 minutes
 #define TX_BASE_TIME_TO_SEND_10ms	1000UL		// 10 seconds
-#define XMESH_BUFFER_SIZE			50
+#define XMESH_BUFFER_SIZE			20
 #if XMESH_BUFFER_SIZE >= 100
 #warning "XMESH_BUFFER_SIZE increase RAM needed"
 #elif XMESH_BUFFER_SIZE > 255
@@ -83,14 +83,21 @@ uint8_t keyTickCounter = 0;
 #endif
 #define XMESH_INDEX(x, y) 		(((x) + (y)) % XMESH_BUFFER_SIZE)
 
+enum
+{
+	MsgType_Standard = 0,
+	MsgType_Encrypted = 1,
+};
+
 typedef struct
 {
+	uint8_t message_type;
 	uint16_t destination_id;
 	uint16_t sender_id;
 	uint16_t origin_id;
 	uint8_t packet_id;
 	uint8_t hop_counter;
-	uint8_t reserved_byte;
+	uint8_t payload_len;
 	uint8_t crc8;
 } MeshHeader_t;
 
@@ -323,10 +330,14 @@ void MSG_FSKSendData() {
 
 	SYSTEM_DelayMs(100);
 
+	/* TODO send FSK message */
 	{	// load the entire packet data into the TX FIFO buffer
 		const uint16_t len_buff = (MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH);
 		for (size_t i = 0, j = 0; i < len_buff; i += 2, j++) {
-        	BK4819_WriteRegister(BK4819_REG_5F, (msgFSKBuffer[i + 1] << 8) | msgFSKBuffer[i]);
+			uint16_t msb_u8 = 0;
+			if ((i + 1) < len_buff)
+				msb_u8 = msgFSKBuffer[i + 1];
+        	BK4819_WriteRegister(BK4819_REG_5F, (msb_u8 << 8) | msgFSKBuffer[i]);
     	}
 	}
 
@@ -605,7 +616,7 @@ static uint8_t crc8_compute(const uint8_t *data, const size_t len) {
     return crc;
 }
 
-void moveUP(char (*rxMessages)[MAX_RX_MSG_LENGTH + 2]) {
+void moveUP(char (*rxMessages)[MAX_DISP_MSG_LENGTH]) {
     // Shift existing lines up
     strcpy(rxMessages[0], rxMessages[1]);
 	strcpy(rxMessages[1], rxMessages[2]);
@@ -621,8 +632,6 @@ void DTMF_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 	if ( msgStatus != READY ) return;
 
 	if ( strlen(txMessage) > 0 && (TX_freq_check(gCurrentVfo->pTX->Frequency) == 0) ) {
-		/* TODO if txMessage contain invalid character */
-
 		msgStatus = SENDING;
 		memcpy(gDTMF_String,txMessage,15);
 
@@ -742,7 +751,7 @@ static bool MSG_SendBuffer(const uint8_t index)
 		MSG_SendPacket();
 
 		moveUP(rxMessage);
-		sprintf(rxMessage[3], "> %s", xMeshBuffer[index].info.payload);
+		snprintf(rxMessage[3], sizeof(rxMessage[3]), "> %s", xMeshBuffer[index].info.payload);
 		UART_printf("SMS%s\n",rxMessage[3]);
 		memset(lastcMessage, 0, sizeof(lastcMessage));
 		memcpy(lastcMessage, xMeshBuffer[index].info.payload, TX_MSG_LENGTH);
@@ -781,13 +790,12 @@ static bool XMESH_AddBuffer(const char payload[TX_MSG_LENGTH], const MeshHeader_
 	else if (header.origin_id == base_id) {
 		UART_printf("<<originated from here. msg ignored!\n");
 		UART_printf("sender_id<%d\n", header.sender_id);
-		/* TODO add checker that previous message has been sent */
 		return false;
 	}
 	else {
 
 		uint8_t buffP = xMeshIndexTail;
-		/* TODO check there's already existed message; origin id & packet id is equal */
+		/* check there's already existed message; origin id & packet id is equal */
 		while (buffP != xMeshIndexHead) {
 			if (xMeshBuffer[buffP].info.header.origin_id == header.origin_id) {
 				if (xMeshBuffer[buffP].info.header.packet_id == header.packet_id) {
@@ -810,7 +818,7 @@ static bool XMESH_AddBuffer(const char payload[TX_MSG_LENGTH], const MeshHeader_
 		xMeshBuffer[xMeshIndexHead].state.rx_counter = 0;
 		xMeshBuffer[xMeshIndexHead].state.rx_timestamp = Systick_Get10msTick();
 		if (xMeshBuffer[xMeshIndexHead].info.header.hop_counter > 0) {
-			/* TODO add random time based on RSSI */
+			/* add random time based on RSSI */
 			xMeshBuffer[xMeshIndexHead].state.tx_time = Systick_Get10msTick()
 					+ TX_BASE_TIME_TO_SEND_10ms + (((base_id / 10) % 10) * 10)
 					+ ((base_id % 10) * 20) + (rssi_dBm * 2);
@@ -869,7 +877,7 @@ bool MSG_Send(const char txMessage[TX_MSG_LENGTH], const uint16_t destination) {
 		MSG_SendPacket();
 
 		moveUP(rxMessage);
-		sprintf(rxMessage[3], "> %s", txMessage);
+		snprintf(rxMessage[3], sizeof(rxMessage[3]), "> %s", txMessage);
 		memset(lastcMessage, 0, sizeof(lastcMessage));
 		memcpy(lastcMessage, txMessage, TX_MSG_LENGTH);
 		cIndex = 0;
@@ -955,7 +963,7 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 						_header.hop_counter,
 						_header.crc8);
 
-				/* TODO CRC check */
+				/* CRC check */
 				if (crc_val == _header.crc8)
 					UART_printf("CRC<VALID\n");
 				else
@@ -964,7 +972,7 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 				if (XMESH_AddBuffer(_payload, _header)) {
 
 					moveUP(rxMessage);
-					snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "< %s", &msgFSKBuffer[2]);
+					snprintf(rxMessage[3], sizeof(rxMessage[3]), "< %s", &msgFSKBuffer[2]);
 					if (crc_val != _header.crc8)
 						rxMessage[3][0] = 'C';
 
@@ -1160,7 +1168,7 @@ void XMESH_TimeSlice500ms()
 	while (index != xMeshIndexHead) {
 		if (xMeshBuffer[index].state.tx_time > 0) {
 			if (Systick_Get10msTick() >= xMeshBuffer[index].state.tx_time) {
-				/* TODO send current buffer */
+				/* send current buffer */
 				if(MSG_SendBuffer(index)){
 					xMeshBuffer[index].state.tx_time = 0;
 				}

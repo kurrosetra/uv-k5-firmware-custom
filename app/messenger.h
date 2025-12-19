@@ -16,16 +16,16 @@ typedef enum KeyboardType {
 } KeyboardType;
 
 enum { 
-	TX_MSG_LENGTH = 30,
-	MSG_HEADER_LENGTH = 10,
+	TX_MSG_LENGTH = 64,
+	MSG_HEADER_LENGTH = 11,
 	MAX_RX_MSG_LENGTH = TX_MSG_LENGTH + 2,
-	XMESH_STATE_LENGTH = 10
+	MAX_DISP_MSG_LENGTH = 32
 };
 
 extern KeyboardType keyboardType;
 extern uint16_t gErrorsDuringMSG;
 extern char cMessage[TX_MSG_LENGTH];
-extern char rxMessage[4][MAX_RX_MSG_LENGTH + 2];
+extern char rxMessage[4][MAX_DISP_MSG_LENGTH];
 extern uint8_t hasNewMessage;
 extern uint8_t keyTickCounter;
 
