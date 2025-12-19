@@ -817,15 +817,22 @@ static uint8_t XMESH_AddBuffer(const char payload[TX_MSG_LENGTH], const MeshHead
 
 		xMeshBuffer[xMeshIndexHead].state.rx_counter = 0;
 		xMeshBuffer[xMeshIndexHead].state.rx_timestamp = Systick_Get10msTick();
-		if (xMeshBuffer[xMeshIndexHead].info.header.hop_counter > 0) {
-			/* add random time based on RSSI */
-			xMeshBuffer[xMeshIndexHead].state.tx_time = Systick_Get10msTick()
-					+ TX_BASE_TIME_TO_SEND_10ms + (((base_id / 10) % 10) * 10)
-					+ ((base_id % 10) * 20) + (rssi_dBm * 2);
+		if (xMeshBuffer[xMeshIndexHead].info.header.destination_id == base_id) {
+			// do not send; already at destination
+			xMeshBuffer[xMeshIndexHead].state.tx_time = 0;
+			UART_printf("MSG for this node!\n");
 		}
 		else{
-			// do not send; already the last hop
-			xMeshBuffer[xMeshIndexHead].state.tx_time = 0;
+			if (xMeshBuffer[xMeshIndexHead].info.header.hop_counter > 0) {
+				/* add random time based on RSSI */
+				xMeshBuffer[xMeshIndexHead].state.tx_time = Systick_Get10msTick()
+						+ TX_BASE_TIME_TO_SEND_10ms + (((base_id / 10) % 10) * 10)
+						+ ((base_id % 10) * 20) + (rssi_dBm * 2);
+			}
+			else {
+				// do not send; already the last hop
+				xMeshBuffer[xMeshIndexHead].state.tx_time = 0;
+			}
 		}
 
 		xMeshIndexHead = XMESH_INDEX(xMeshIndexHead, 1);
@@ -969,7 +976,8 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 					rxMessage[3][0] = 'C';
 
 				#ifdef ENABLE_MESSENGER_UART
-				UART_printf("SMS%s\n", rxMessage[3]);
+				if (add_buffer_ret == ABuffer_RET_MSG_NEW)
+					UART_printf("SMS%s\n", rxMessage[3]);
 				#endif
 			}
 			else {
