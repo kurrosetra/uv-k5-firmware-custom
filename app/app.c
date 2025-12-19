@@ -1338,16 +1338,15 @@ void APP_TimeSlice500ms(void)
 		{
 			if (--gDTMF_RX_live_timeout == 0)
 			{
-				if (gDTMF_RX_live[0] != 0)
-				{
+				if (strlen(gDTMF_RX_live) > 2) {
 					char _buf[32];
-					uint32_t _buflen=0;
-					_buflen=sprintf(_buf,"\n[D%d]<%s\n",strlen(gDTMF_RX_live),gDTMF_RX_live);
+					uint32_t _buflen = 0;
+					_buflen = sprintf(_buf, "\n[D%d]<%s\n", strlen(gDTMF_RX_live), gDTMF_RX_live);
 
 					memset(gDTMF_RX_live, 0, sizeof(gDTMF_RX_live));
-					gUpdateDisplay   = true;
+					gUpdateDisplay = true;
 
-					UART_Send(_buf,_buflen);
+					UART_Send(_buf, _buflen);
 				}
 			}
 		}

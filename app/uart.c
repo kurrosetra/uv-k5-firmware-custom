@@ -191,7 +191,7 @@ void UART_HandleCommand(void)
 		char *payload = tmp;
 		char dest_id[8] = { 0 };
 		uint8_t comma_pos = 0;
-		uint16_t dID=0;
+		uint16_t dID = 0;
 		bool comma_found = false;
 		char c[2] = {0,0};
 
@@ -214,7 +214,7 @@ void UART_HandleCommand(void)
 //		UART_printf("%s=%d,%s\n", tmp, dID, payload);
 
 		if (strlen(payload) > 0) {
-			if (!MSG_Send(payload, dID)) {
+			if (!MSG_Send(payload, strlen(payload), dID)) {
 				UART_printf("in RX state!\n");
 			}
 			UART_printf("SMS>%s\r\n", payload);

@@ -54,8 +54,8 @@ unsigned char numberOfLettersAssignedToKey[9] = { 4, 3, 3, 3, 3, 3, 4, 3, 4 };
 char T9TableNum[9][4] = { {'1', '\0', '\0', '\0'}, {'2', '\0', '\0', '\0'}, {'3', '\0', '\0', '\0'}, {'4', '\0', '\0', '\0'}, {'5', '\0', '\0', '\0'}, {'6', '\0', '\0', '\0'}, {'7', '\0', '\0', '\0'}, {'8', '\0', '\0', '\0'}, {'9', '\0', '\0', '\0'} };
 unsigned char numberOfNumsAssignedToKey[9] = { 1, 1, 1, 1, 1, 1, 1, 1, 1 };
 
-char cMessage[TX_MSG_LENGTH];
-char lastcMessage[TX_MSG_LENGTH];
+char cMessage[MAX_DISP_MSG_LENGTH];
+char lastcMessage[MAX_DISP_MSG_LENGTH];
 char rxMessage[4][MAX_DISP_MSG_LENGTH];;
 unsigned char cIndex = 0;
 unsigned char prevKey = 0, prevLetter = 0;
@@ -89,15 +89,23 @@ enum
 	MsgType_Encrypted = 1,
 };
 
+enum
+{
+	ABuffer_RET_ERROR = 0,
+	ABuffer_RET_MSG_NEW = 1,
+	ABuffer_RET_MSG_ORIGIN = 2,
+	ABuffer_RET_MSG_EXISTED = 3,
+};
+
 typedef struct
 {
-	uint8_t message_type;
 	uint16_t destination_id;
 	uint16_t sender_id;
 	uint16_t origin_id;
 	uint8_t packet_id;
-	uint8_t hop_counter;
+	uint8_t message_type;
 	uint8_t payload_len;
+	uint8_t hop_counter;
 	uint8_t crc8;
 } MeshHeader_t;
 
@@ -728,13 +736,10 @@ static bool MSG_SendBuffer(const uint8_t index)
 	}
 
 	if ((TX_freq_check(gCurrentVfo->pTX->Frequency) == 0)
-			&& strlen((const char*) xMeshBuffer[index].info.payload) > 0) {
+			&& xMeshBuffer[index].info.header.payload_len > 0) {
 
 		memset(msgFSKBuffer, 0, sizeof(msgFSKBuffer));
-		// first 2 byte sync, message type
-		msgFSKBuffer[0] = 'M';
-		msgFSKBuffer[1] = 'S';
-		memcpy(msgFSKBuffer + 2, xMeshBuffer[index].info.payload, TX_MSG_LENGTH);
+
 		MeshHeader_t _h;
 		memcpy(&_h, &xMeshBuffer[index].info.header, MSG_HEADER_LENGTH);
 		//change sender id to base_id
@@ -743,23 +748,19 @@ static bool MSG_SendBuffer(const uint8_t index)
 		if (_h.hop_counter > 0)
 			// counting down the hop counter in header
 			_h.hop_counter--;
-		memcpy(msgFSKBuffer + MAX_RX_MSG_LENGTH, &_h, MSG_HEADER_LENGTH);
+		// zeroed previous buffer's CRC
+		_h.crc8 = 0;
+		memcpy(msgFSKBuffer, &_h, MSG_HEADER_LENGTH);
+		memcpy(msgFSKBuffer + MSG_HEADER_LENGTH, xMeshBuffer[index].info.payload, _h.payload_len);
 		//update CRC
-		_h.crc8 = msgFSKBuffer[MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1] = crc8_compute(
-				msgFSKBuffer, MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1);
+		_h.crc8 = msgFSKBuffer[MSG_HEADER_LENGTH - 1] = crc8_compute(
+				msgFSKBuffer, MSG_HEADER_LENGTH + _h.payload_len);
 
 		MSG_SendPacket();
 
 		moveUP(rxMessage);
 		snprintf(rxMessage[3], sizeof(rxMessage[3]), "> %s", xMeshBuffer[index].info.payload);
-		UART_printf("SMS%s\n",rxMessage[3]);
-		memset(lastcMessage, 0, sizeof(lastcMessage));
-		memcpy(lastcMessage, xMeshBuffer[index].info.payload, TX_MSG_LENGTH);
-		cIndex = 0;
-		prevKey = 0;
-		prevLetter = 0;
-		memset(cMessage, 0, sizeof(cMessage));
-
+		UART_printf("SMS%s\n", rxMessage[3]);
 
 		return true;
 	}
@@ -770,9 +771,8 @@ static bool MSG_SendBuffer(const uint8_t index)
 	return false;
 }
 
-
 // all from FSK is save to buffer if message valid and buffer still available
-static bool XMESH_AddBuffer(const char payload[TX_MSG_LENGTH], const MeshHeader_t header)
+static uint8_t XMESH_AddBuffer(const char payload[TX_MSG_LENGTH], const MeshHeader_t header)
 {
 	const uint16_t rssi_reg67 = BK4819_ReadRegister(BK4819_REG_67) & 0x1FF;
 	int16_t rssi_dBm = rssi_reg67 / 2 - 160;
@@ -785,12 +785,12 @@ static bool XMESH_AddBuffer(const char payload[TX_MSG_LENGTH], const MeshHeader_
 	// buffer full!!
 	if (next_index == xMeshIndexTail) {
 		UART_printf("[Err]Buffer full:T%d->H%d\n", xMeshIndexTail, xMeshIndexHead);
-		return false;
+		return ABuffer_RET_ERROR;
 	}
 	else if (header.origin_id == base_id) {
 		UART_printf("<<originated from here. msg ignored!\n");
 		UART_printf("sender_id<%d\n", header.sender_id);
-		return false;
+		return ABuffer_RET_MSG_ORIGIN;
 	}
 	else {
 
@@ -805,15 +805,15 @@ static bool XMESH_AddBuffer(const char payload[TX_MSG_LENGTH], const MeshHeader_
 						xMeshBuffer[buffP].state.tx_time += 1000;
 					}
 					UART_printf("MSG existed[%d]!\n", xMeshBuffer[buffP].state.rx_counter);
-					return false;
+					return ABuffer_RET_MSG_EXISTED;
 				}
 			}
 			buffP = XMESH_INDEX(buffP, 1);
 		}
 
 		// save to xMeshBuffer
-		memcpy(xMeshBuffer[xMeshIndexHead].info.payload, payload, TX_MSG_LENGTH);
 		memcpy(&xMeshBuffer[xMeshIndexHead].info.header, &header, MSG_HEADER_LENGTH);
+		memcpy(xMeshBuffer[xMeshIndexHead].info.payload, payload, TX_MSG_LENGTH);
 
 		xMeshBuffer[xMeshIndexHead].state.rx_counter = 0;
 		xMeshBuffer[xMeshIndexHead].state.rx_timestamp = Systick_Get10msTick();
@@ -829,57 +829,42 @@ static bool XMESH_AddBuffer(const char payload[TX_MSG_LENGTH], const MeshHeader_
 		}
 
 		xMeshIndexHead = XMESH_INDEX(xMeshIndexHead, 1);
-		return true;
+		return ABuffer_RET_MSG_NEW;
 	}
 
-	return false;
+	return ABuffer_RET_ERROR;
 }
 #endif // #ifdef ENABLE_XMESH
 
-bool MSG_Send(const char txMessage[TX_MSG_LENGTH], const uint16_t destination) {
+bool MSG_Send(const char txMessage[TX_MSG_LENGTH], const uint8_t txLen, const uint16_t destination) {
 
 	if (msgStatus != READY)
 		return false;
 
-	if ( strlen(txMessage) > 0 && (TX_freq_check(gCurrentVfo->pTX->Frequency) == 0) ) {
+	if ( txLen > 0 && (TX_freq_check(gCurrentVfo->pTX->Frequency) == 0) ) {
 
-		// next MSG_HEADER_LENGTH for header
-		// [0..1] 	: destination ID
-		// [2..3] 	: sender ID
-		// [4..5] 	: origin ID
-		// [6] 		: packet ID
-		// [7]		: hop counter
-		// [8]		: (reserved byte)
-		// [9]		: CRC-8
-		uint8_t headerMessage[MSG_HEADER_LENGTH];
-		Union_2B u2b;
-		u2b.u16 = destination;
-		headerMessage[0] = u2b.u8[0];
-		headerMessage[1] = u2b.u8[1];
-		u2b.u16 = base_id;
-		headerMessage[2] = u2b.u8[0];
-		headerMessage[3] = u2b.u8[1];
-		headerMessage[4] = u2b.u8[0];
-		headerMessage[5] = u2b.u8[1];
-		headerMessage[6] = xMeshSendPacketId++;
-		headerMessage[7] = HOP_COUNTER_MAX;
-		headerMessage[8] = headerMessage[9] = 0;
+		// next MSG_HEADER_LENGTH for header @MeshHeader_t
+		MeshHeader_t _h;
+		_h.destination_id = destination;
+		_h.origin_id = _h.sender_id = base_id;
+		_h.packet_id = xMeshSendPacketId++;
+		_h.message_type = MsgType_Standard;
+		_h.payload_len = txLen;
+		_h.hop_counter = HOP_COUNTER_MAX;
+		_h.crc8 = 0;
 
 		memset(msgFSKBuffer, 0, sizeof(msgFSKBuffer));
-		// first 2 byte sync, message type
-		msgFSKBuffer[0] = 'M';
-		msgFSKBuffer[1] = 'S';
-		memcpy(msgFSKBuffer + 2, txMessage, TX_MSG_LENGTH);
-		memcpy(msgFSKBuffer + MAX_RX_MSG_LENGTH, headerMessage, MSG_HEADER_LENGTH);
-		msgFSKBuffer[MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1] = headerMessage[9] = crc8_compute(
-				msgFSKBuffer, MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1);
+		memcpy(msgFSKBuffer, &_h, MSG_HEADER_LENGTH);
+		memcpy(msgFSKBuffer + MSG_HEADER_LENGTH, txMessage, txLen);
+		_h.crc8 = crc8_compute(msgFSKBuffer, MSG_HEADER_LENGTH + _h.payload_len);
+		msgFSKBuffer[MSG_HEADER_LENGTH - 1] = _h.crc8;
 
-		MSG_SendPacket();
+		MSG_SendPacket(MSG_HEADER_LENGTH + txLen);
 
 		moveUP(rxMessage);
 		snprintf(rxMessage[3], sizeof(rxMessage[3]), "> %s", txMessage);
 		memset(lastcMessage, 0, sizeof(lastcMessage));
-		memcpy(lastcMessage, txMessage, TX_MSG_LENGTH);
+		memcpy(lastcMessage, txMessage, sizeof(lastcMessage));
 		cIndex = 0;
 		prevKey = 0;
 		prevLetter = 0;
@@ -935,55 +920,64 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 		msgStatus = READY;
 
 		if (gFSKWriteIndex > 0) {
+			uint8_t add_buffer_ret = ABuffer_RET_ERROR;
+			uint8_t fsk_crc = 0, calc_crc = 0;
+			MeshHeader_t _h;
+			char *_payload = (char*) (msgFSKBuffer + MSG_HEADER_LENGTH);
 
-			uint8_t crc_val = crc8_compute(msgFSKBuffer, MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1);
+			if (gFSKWriteIndex > MSG_HEADER_LENGTH) {
 
-			if (msgFSKBuffer[0] == 'M' && msgFSKBuffer[1] == 'S') {
-
-				char _payload[TX_MSG_LENGTH];
-				MeshHeader_t _header;
-
-				memset(_payload, 0, TX_MSG_LENGTH);
-				snprintf(_payload, TX_MSG_LENGTH, "%s", &msgFSKBuffer[2]);
-				memcpy(&_header, &msgFSKBuffer[MAX_RX_MSG_LENGTH], MSG_HEADER_LENGTH);
-
-				// next MSG_HEADER_LENGTH for header
-				// [0..1] 	: destination ID
-				// [2..3] 	: sender ID
-				// [4..5] 	: origin ID
-				// [6] 		: packet ID
-				// [7]		: hop counter
-				// [8]		: (reserved byte)
-				// [9]		: CRC-8
-				UART_printf("header<%d,%d,%d,%d,%d,%d\n",
-						_header.destination_id,
-						_header.sender_id,
-						_header.origin_id,
-						_header.packet_id,
-						_header.hop_counter,
-						_header.crc8);
+				memcpy(&_h, msgFSKBuffer, MSG_HEADER_LENGTH);
+				// save receive CRC byte, then zeroed it
+				fsk_crc = msgFSKBuffer[MSG_HEADER_LENGTH - 1];
+				msgFSKBuffer[MSG_HEADER_LENGTH - 1] = 0;
+				// calculate CRC
+				calc_crc= crc8_compute(msgFSKBuffer, MSG_HEADER_LENGTH + _h.payload_len);
+				msgFSKBuffer[MSG_HEADER_LENGTH - 1] = fsk_crc;
 
 				/* CRC check */
-				if (crc_val == _header.crc8)
+				if (fsk_crc == calc_crc)
 					UART_printf("CRC<VALID\n");
 				else
 					UART_printf("CRC<MISMATCH\n");
 
-				if (XMESH_AddBuffer(_payload, _header)) {
+				// next MSG_HEADER_LENGTH for header, see @MeshHeader_t
+				UART_printf("header<x%02X,x%02X,x%02X,%d,%d,%d,%d,x%02X\n",
+						_h.destination_id,
+						_h.sender_id,
+						_h.origin_id,
+						_h.packet_id,
+						_h.message_type,
+						_h.payload_len,
+						_h.hop_counter,
+						_h.crc8);
+				UART_printf("payload<%s\n", msgFSKBuffer + MSG_HEADER_LENGTH);
 
-					moveUP(rxMessage);
-					snprintf(rxMessage[3], sizeof(rxMessage[3]), "< %s", &msgFSKBuffer[2]);
-					if (crc_val != _header.crc8)
-						rxMessage[3][0] = 'C';
+				add_buffer_ret = XMESH_AddBuffer(_payload, _h);
+			}
 
-					#ifdef ENABLE_MESSENGER_UART
-					UART_printf("SMS%s\n", rxMessage[3]);
-					#endif
+			if (add_buffer_ret != ABuffer_RET_ERROR) {
+				moveUP(rxMessage);
+				if (_h.message_type == MsgType_Standard) {
+					snprintf(rxMessage[3], sizeof(rxMessage[3]), "< %s", _payload);
 				}
+				else if (_h.message_type == MsgType_Encrypted) {
+					snprintf(rxMessage[3], sizeof(rxMessage[3]), "< enc msg %dB from %d",
+							_h.payload_len, _h.sender_id);
+				}
+				if (calc_crc != fsk_crc)
+					rxMessage[3][0] = 'C';
+
+				#ifdef ENABLE_MESSENGER_UART
+				UART_printf("SMS%s\n", rxMessage[3]);
+				#endif
 			}
 			else {
 				moveUP(rxMessage);
-				snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "? %s", &msgFSKBuffer[2]);
+				snprintf(rxMessage[3], sizeof(rxMessage[3]), "? unknown format");
+				#ifdef ENABLE_MESSENGER_UART
+				UART_printf("SMS%s\n", rxMessage[3]);
+				#endif
 			}
 
 			if ( gScreenToDisplay != DISPLAY_MSG ) {
@@ -1141,9 +1135,8 @@ void XMESH_INIT()
 		snprintf(_number, sizeof(_number), "%d", base_id);
 		MSG_SetId(_name, _number);
 	}
-	else {
-		UART_printf("net=%s:id=%d", _name, base_id);
-	}
+
+	UART_printf("net=%s:id=%d\n", _name, base_id);
 }
 
 void XMESH_TimeSlice500ms()
@@ -1298,7 +1291,7 @@ void  MSG_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld) {
 				break;
 			case KEY_UP:
 				memset(cMessage, 0, sizeof(cMessage));
-				memcpy(cMessage, lastcMessage, TX_MSG_LENGTH);
+				memcpy(cMessage, lastcMessage, sizeof(lastcMessage));
 				cIndex = strlen(cMessage);
 				break;
 			/*case KEY_DOWN:
@@ -1306,7 +1299,7 @@ void  MSG_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld) {
 			case KEY_MENU:
 			case KEY_PTT:
 				// Send message
-				MSG_Send(cMessage, 0);
+				MSG_Send(cMessage, strlen(cMessage), 0);
 				break;
 			case KEY_EXIT:
 				gRequestDisplayScreen = DISPLAY_MAIN;
