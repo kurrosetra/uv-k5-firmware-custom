@@ -699,6 +699,19 @@ static void MSG_SendPacket()
 {
 	msgStatus = SENDING;
 
+	MeshHeader_t *_h = NULL;
+	_h = (MeshHeader_t*) msgFSKBufferTx;
+	// next MSG_HEADER_LENGTH for header, see @MeshHeader_t
+	UART_printf("header<x%02X,x%02X,x%02X,%d,%d,%d,%d,x%02X\n",
+			_h->destination_id,
+			_h->sender_id,
+			_h->origin_id,
+			_h->packet_id,
+			_h->message_type,
+			_h->payload_len,
+			_h->hop_counter,
+			_h->crc8);
+
 	RADIO_SetVfoState(VFO_STATE_NORMAL);
 	BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, true);
 	BK4819_DisableDTMF();
