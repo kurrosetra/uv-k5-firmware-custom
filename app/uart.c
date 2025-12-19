@@ -146,36 +146,35 @@ bool UART_IsCommandAvailable(void)
 	static uint8_t waitDelay10msCounter = 0;
 	char _c[2] = { 0, 0 };
 
-	while (1) {
-		if (uart_rx_index == DmaIndex)
-			return false;
-
-		waitDelay10msCounter++;
-
-		if (waitDelay10msCounter > 2) {
-			waitDelay10msCounter = 0;
-
-//			UART_printf("index=%d,%d,%d\n", DmaIndex, uart_rx_index,
-//					(DmaIndex > uart_rx_index) ?
-//							(int)(DmaIndex - uart_rx_index) :
-//							(int)(DmaIndex + sizeof(UART_DMA_Buffer) - uart_rx_index));
-			memset(gCmdMessage, 0, sizeof(gCmdMessage));
-			while (uart_rx_index != DmaIndex) {
-				if ((UART_DMA_Buffer[uart_rx_index] == '\r')
-						|| (UART_DMA_Buffer[uart_rx_index] == '\n')
-						|| (UART_DMA_Buffer[uart_rx_index] == '\0')) {
-
-					uart_rx_index = DmaIndex;
-					return true;
-				}
-				_c[0] = UART_DMA_Buffer[uart_rx_index];
-				strcat(gCmdMessage, _c);
-				uart_rx_index = DMA_INDEX(uart_rx_index, 1);
-			}
-		}
-
-		break;
+	if (uart_rx_index == DmaIndex) {
+		waitDelay10msCounter = 0;
+		return false;
 	}
+
+	waitDelay10msCounter++;
+
+	if (waitDelay10msCounter > 10) {
+		waitDelay10msCounter = 0;
+
+//		UART_printf("index=%d,%d,%d\n", uart_rx_index, DmaIndex,
+//				(DmaIndex > uart_rx_index) ?
+//						(int) (DmaIndex - uart_rx_index) :
+//						(int) (DmaIndex + sizeof(UART_DMA_Buffer) - uart_rx_index));
+		memset(gCmdMessage, 0, sizeof(gCmdMessage));
+		while (uart_rx_index != DmaIndex) {
+			if ((UART_DMA_Buffer[uart_rx_index] == '\r')
+					|| (UART_DMA_Buffer[uart_rx_index] == '\n')
+					|| (UART_DMA_Buffer[uart_rx_index] == '\0')) {
+
+				uart_rx_index = DmaIndex;
+				return true;
+			}
+			_c[0] = UART_DMA_Buffer[uart_rx_index];
+			strcat(gCmdMessage, _c);
+			uart_rx_index = DMA_INDEX(uart_rx_index, 1);
+		}
+	}
+
 	return false;
 }
 
@@ -196,6 +195,9 @@ void UART_HandleCommand(void)
 		char c[2] = {0,0};
 
 		for ( comma_pos = 0; comma_pos < strlen(tmp); comma_pos++ ) {
+			// comma_pos exceed dest_id length
+			if (comma_pos >= 8)
+				break;
 			c[0] = *(tmp + comma_pos);
 			if (c[0] == ',') {
 				comma_found = true;

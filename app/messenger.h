@@ -16,9 +16,9 @@ typedef enum KeyboardType {
 } KeyboardType;
 
 enum { 
-	TX_MSG_LENGTH = 64,
 	MSG_HEADER_LENGTH = 11,
-	MAX_RX_MSG_LENGTH = TX_MSG_LENGTH + 2,
+	TX_MSG_LENGTH = 128,
+	RX_MSG_LENGTH = TX_MSG_LENGTH,
 	MAX_DISP_MSG_LENGTH = 32
 };
 
