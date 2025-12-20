@@ -54,16 +54,17 @@ unsigned char numberOfLettersAssignedToKey[9] = { 4, 3, 3, 3, 3, 3, 4, 3, 4 };
 char T9TableNum[9][4] = { {'1', '\0', '\0', '\0'}, {'2', '\0', '\0', '\0'}, {'3', '\0', '\0', '\0'}, {'4', '\0', '\0', '\0'}, {'5', '\0', '\0', '\0'}, {'6', '\0', '\0', '\0'}, {'7', '\0', '\0', '\0'}, {'8', '\0', '\0', '\0'}, {'9', '\0', '\0', '\0'} };
 unsigned char numberOfNumsAssignedToKey[9] = { 1, 1, 1, 1, 1, 1, 1, 1, 1 };
 
-char cMessage[TX_MSG_LENGTH];
-char lastcMessage[TX_MSG_LENGTH];
-char rxMessage[4][MAX_RX_MSG_LENGTH + 2];
+char cMessage[MAX_DISP_MSG_LENGTH];
+char lastcMessage[MAX_DISP_MSG_LENGTH];
+char rxMessage[4][MAX_DISP_MSG_LENGTH];;
 unsigned char cIndex = 0;
 unsigned char prevKey = 0, prevLetter = 0;
 KeyboardType keyboardType = UPPERCASE;
 
 MsgStatus msgStatus = READY;
 
-uint8_t msgFSKBuffer[MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH];
+uint8_t msgFSKBufferTx[MSG_HEADER_LENGTH + TX_MSG_LENGTH];
+uint8_t msgFSKBufferRx[MSG_HEADER_LENGTH + RX_MSG_LENGTH];
 
 uint16_t gErrorsDuringMSG;
 
@@ -75,7 +76,7 @@ uint8_t keyTickCounter = 0;
 #define HOP_COUNTER_MAX  			7
 #define RX_TIME_EXPIRATION_10ms  	60000UL		// 10 minutes
 #define TX_BASE_TIME_TO_SEND_10ms	1000UL		// 10 seconds
-#define XMESH_BUFFER_SIZE			50
+#define XMESH_BUFFER_SIZE			40
 #if XMESH_BUFFER_SIZE >= 100
 #warning "XMESH_BUFFER_SIZE increase RAM needed"
 #elif XMESH_BUFFER_SIZE > 255
@@ -83,14 +84,29 @@ uint8_t keyTickCounter = 0;
 #endif
 #define XMESH_INDEX(x, y) 		(((x) + (y)) % XMESH_BUFFER_SIZE)
 
+enum
+{
+	MsgType_Standard = 0,
+	MsgType_Encrypted = 1,
+};
+
+enum
+{
+	ABuffer_RET_ERROR = 0,
+	ABuffer_RET_MSG_NEW = 1,
+	ABuffer_RET_MSG_ORIGIN = 2,
+	ABuffer_RET_MSG_EXISTED = 3,
+};
+
 typedef struct
 {
 	uint16_t destination_id;
 	uint16_t sender_id;
 	uint16_t origin_id;
 	uint8_t packet_id;
+	uint8_t message_type;
+	uint8_t payload_len;
 	uint8_t hop_counter;
-	uint8_t reserved_byte;
 	uint8_t crc8;
 } MeshHeader_t;
 
@@ -284,7 +300,7 @@ void MSG_FSKSendData() {
 				(0u <<  0);    // 0 ~ 7   ???
 
 	// Set packet length (not including pre-amble and sync bytes that we can't seem to disable)
-	BK4819_WriteRegister(BK4819_REG_5D, ((MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH) << 8));
+	BK4819_WriteRegister(BK4819_REG_5D, ((MSG_HEADER_LENGTH + RX_MSG_LENGTH) << 8));
 
 	// REG_5A
 	//
@@ -323,10 +339,14 @@ void MSG_FSKSendData() {
 
 	SYSTEM_DelayMs(100);
 
+	/* TODO send FSK message */
 	{	// load the entire packet data into the TX FIFO buffer
-		const uint16_t len_buff = (MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH);
+		const uint16_t len_buff = (MSG_HEADER_LENGTH + RX_MSG_LENGTH);
 		for (size_t i = 0, j = 0; i < len_buff; i += 2, j++) {
-        	BK4819_WriteRegister(BK4819_REG_5F, (msgFSKBuffer[i + 1] << 8) | msgFSKBuffer[i]);
+			uint16_t msb_u8 = 0;
+			if ((i + 1) < len_buff)
+				msb_u8 = msgFSKBufferTx[i + 1];
+        	BK4819_WriteRegister(BK4819_REG_5F, (msb_u8 << 8) | msgFSKBufferTx[i]);
     	}
 	}
 
@@ -565,7 +585,7 @@ void MSG_EnableRX(const bool enable) {
 
 		{	// packet size .. sync + 14 bytes - size of a single packet
 
-			uint16_t size = (MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH);
+			uint16_t size = (MSG_HEADER_LENGTH + RX_MSG_LENGTH);
 			// size -= (fsk_reg59 & (1u << 3)) ? 4 : 2;
 			size = (((size + 1) / 2) * 2) + 2;             // round up to even, else FSK RX doesn't work
 			BK4819_WriteRegister(BK4819_REG_5D, (size << 8));
@@ -605,7 +625,7 @@ static uint8_t crc8_compute(const uint8_t *data, const size_t len) {
     return crc;
 }
 
-void moveUP(char (*rxMessages)[MAX_RX_MSG_LENGTH + 2]) {
+void moveUP(char (*rxMessages)[MAX_DISP_MSG_LENGTH]) {
     // Shift existing lines up
     strcpy(rxMessages[0], rxMessages[1]);
 	strcpy(rxMessages[1], rxMessages[2]);
@@ -621,8 +641,6 @@ void DTMF_Send(const char txMessage[TX_MSG_LENGTH], bool bServiceMessage) {
 	if ( msgStatus != READY ) return;
 
 	if ( strlen(txMessage) > 0 && (TX_freq_check(gCurrentVfo->pTX->Frequency) == 0) ) {
-		/* TODO if txMessage contain invalid character */
-
 		msgStatus = SENDING;
 		memcpy(gDTMF_String,txMessage,15);
 
@@ -681,6 +699,19 @@ static void MSG_SendPacket()
 {
 	msgStatus = SENDING;
 
+	MeshHeader_t *_h = NULL;
+	_h = (MeshHeader_t*) msgFSKBufferTx;
+	// next MSG_HEADER_LENGTH for header, see @MeshHeader_t
+	UART_printf("header<x%02X,x%02X,x%02X,%d,%d,%d,%d,x%02X\n",
+			_h->destination_id,
+			_h->sender_id,
+			_h->origin_id,
+			_h->packet_id,
+			_h->message_type,
+			_h->payload_len,
+			_h->hop_counter,
+			_h->crc8);
+
 	RADIO_SetVfoState(VFO_STATE_NORMAL);
 	BK4819_ToggleGpioOut(BK4819_GPIO5_PIN1_RED, true);
 	BK4819_DisableDTMF();
@@ -719,13 +750,10 @@ static bool MSG_SendBuffer(const uint8_t index)
 	}
 
 	if ((TX_freq_check(gCurrentVfo->pTX->Frequency) == 0)
-			&& strlen((const char*) xMeshBuffer[index].info.payload) > 0) {
+			&& xMeshBuffer[index].info.header.payload_len > 0) {
 
-		memset(msgFSKBuffer, 0, sizeof(msgFSKBuffer));
-		// first 2 byte sync, message type
-		msgFSKBuffer[0] = 'M';
-		msgFSKBuffer[1] = 'S';
-		memcpy(msgFSKBuffer + 2, xMeshBuffer[index].info.payload, TX_MSG_LENGTH);
+		memset(msgFSKBufferTx, 0, sizeof(msgFSKBufferTx));
+
 		MeshHeader_t _h;
 		memcpy(&_h, &xMeshBuffer[index].info.header, MSG_HEADER_LENGTH);
 		//change sender id to base_id
@@ -734,23 +762,19 @@ static bool MSG_SendBuffer(const uint8_t index)
 		if (_h.hop_counter > 0)
 			// counting down the hop counter in header
 			_h.hop_counter--;
-		memcpy(msgFSKBuffer + MAX_RX_MSG_LENGTH, &_h, MSG_HEADER_LENGTH);
+		// zeroed previous buffer's CRC
+		_h.crc8 = 0;
+		memcpy(msgFSKBufferTx, &_h, MSG_HEADER_LENGTH);
+		memcpy(msgFSKBufferTx + MSG_HEADER_LENGTH, xMeshBuffer[index].info.payload, _h.payload_len);
 		//update CRC
-		_h.crc8 = msgFSKBuffer[MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1] = crc8_compute(
-				msgFSKBuffer, MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1);
+		_h.crc8 = msgFSKBufferTx[MSG_HEADER_LENGTH - 1] = crc8_compute(
+				msgFSKBufferTx, MSG_HEADER_LENGTH + _h.payload_len);
 
 		MSG_SendPacket();
 
 		moveUP(rxMessage);
-		sprintf(rxMessage[3], "> %s", xMeshBuffer[index].info.payload);
-		UART_printf("SMS%s\n",rxMessage[3]);
-		memset(lastcMessage, 0, sizeof(lastcMessage));
-		memcpy(lastcMessage, xMeshBuffer[index].info.payload, TX_MSG_LENGTH);
-		cIndex = 0;
-		prevKey = 0;
-		prevLetter = 0;
-		memset(cMessage, 0, sizeof(cMessage));
-
+		snprintf(rxMessage[3], sizeof(rxMessage[3]), "> %s", xMeshBuffer[index].info.payload);
+		UART_printf("SMS%s\n", rxMessage[3]);
 
 		return true;
 	}
@@ -761,33 +785,29 @@ static bool MSG_SendBuffer(const uint8_t index)
 	return false;
 }
 
-
 // all from FSK is save to buffer if message valid and buffer still available
-static bool XMESH_AddBuffer(const char payload[TX_MSG_LENGTH], const MeshHeader_t header)
+static uint8_t XMESH_AddBuffer(const char payload[TX_MSG_LENGTH], const MeshHeader_t header, const bool CRC_VALID)
 {
-	const uint16_t rssi_reg67 = BK4819_ReadRegister(BK4819_REG_67) & 0x1FF;
-	int16_t rssi_dBm = rssi_reg67 / 2 - 160;
-	#ifdef ENABLE_MESSENGER_UART
-	UART_printf("rssi<%ddBm\n", rssi_dBm);
-	#endif
-
 
 	uint8_t next_index = XMESH_INDEX(xMeshIndexHead, 1);
 	// buffer full!!
 	if (next_index == xMeshIndexTail) {
 		UART_printf("[Err]Buffer full:T%d->H%d\n", xMeshIndexTail, xMeshIndexHead);
-		return false;
+		return ABuffer_RET_ERROR;
+	}
+	else if (CRC_VALID == false) {
+		UART_printf("[Err]CRC invalid!\n");
+		return ABuffer_RET_ERROR;
 	}
 	else if (header.origin_id == base_id) {
 		UART_printf("<<originated from here. msg ignored!\n");
 		UART_printf("sender_id<%d\n", header.sender_id);
-		/* TODO add checker that previous message has been sent */
-		return false;
+		return ABuffer_RET_MSG_ORIGIN;
 	}
 	else {
 
 		uint8_t buffP = xMeshIndexTail;
-		/* TODO check there's already existed message; origin id & packet id is equal */
+		/* check there's already existed message; origin id & packet id is equal */
 		while (buffP != xMeshIndexHead) {
 			if (xMeshBuffer[buffP].info.header.origin_id == header.origin_id) {
 				if (xMeshBuffer[buffP].info.header.packet_id == header.packet_id) {
@@ -797,81 +817,79 @@ static bool XMESH_AddBuffer(const char payload[TX_MSG_LENGTH], const MeshHeader_
 						xMeshBuffer[buffP].state.tx_time += 1000;
 					}
 					UART_printf("MSG existed[%d]!\n", xMeshBuffer[buffP].state.rx_counter);
-					return false;
+					return ABuffer_RET_MSG_EXISTED;
 				}
 			}
 			buffP = XMESH_INDEX(buffP, 1);
 		}
 
 		// save to xMeshBuffer
-		memcpy(xMeshBuffer[xMeshIndexHead].info.payload, payload, TX_MSG_LENGTH);
 		memcpy(&xMeshBuffer[xMeshIndexHead].info.header, &header, MSG_HEADER_LENGTH);
+		memcpy(xMeshBuffer[xMeshIndexHead].info.payload, payload, TX_MSG_LENGTH);
 
 		xMeshBuffer[xMeshIndexHead].state.rx_counter = 0;
 		xMeshBuffer[xMeshIndexHead].state.rx_timestamp = Systick_Get10msTick();
-		if (xMeshBuffer[xMeshIndexHead].info.header.hop_counter > 0) {
-			/* TODO add random time based on RSSI */
-			xMeshBuffer[xMeshIndexHead].state.tx_time = Systick_Get10msTick()
-					+ TX_BASE_TIME_TO_SEND_10ms + (((base_id / 10) % 10) * 10)
-					+ ((base_id % 10) * 20) + (rssi_dBm * 2);
-		}
-		else{
-			// do not send; already the last hop
+		if (xMeshBuffer[xMeshIndexHead].info.header.destination_id == base_id) {
+			// do not send; already at destination
 			xMeshBuffer[xMeshIndexHead].state.tx_time = 0;
+			UART_printf("MSG for this node!\n");
+		}
+		else {
+			const uint16_t rssi_reg67 = BK4819_ReadRegister(BK4819_REG_67) & 0x1FF;
+			int16_t rssi_dBm = rssi_reg67 / 2 - 160;
+			#ifdef ENABLE_MESSENGER_UART
+			UART_printf("rssi<%ddBm\n", rssi_dBm);
+			#endif
+
+			if (xMeshBuffer[xMeshIndexHead].info.header.hop_counter > 0) {
+				/* add random time based on RSSI */
+				xMeshBuffer[xMeshIndexHead].state.tx_time = Systick_Get10msTick()
+						+ TX_BASE_TIME_TO_SEND_10ms + (((base_id / 10) % 10) * 10)
+						+ ((base_id % 10) * 20) + (rssi_dBm * 2);
+			}
+			else {
+				// do not send; already the last hop
+				xMeshBuffer[xMeshIndexHead].state.tx_time = 0;
+			}
 		}
 
 		xMeshIndexHead = XMESH_INDEX(xMeshIndexHead, 1);
-		return true;
+		return ABuffer_RET_MSG_NEW;
 	}
 
-	return false;
+	return ABuffer_RET_ERROR;
 }
 #endif // #ifdef ENABLE_XMESH
 
-bool MSG_Send(const char txMessage[TX_MSG_LENGTH], const uint16_t destination) {
+bool MSG_Send(const char txMessage[TX_MSG_LENGTH], const uint8_t txLen, const uint16_t destination) {
 
 	if (msgStatus != READY)
 		return false;
 
-	if ( strlen(txMessage) > 0 && (TX_freq_check(gCurrentVfo->pTX->Frequency) == 0) ) {
+	if ( txLen > 0 && (TX_freq_check(gCurrentVfo->pTX->Frequency) == 0) ) {
 
-		// next MSG_HEADER_LENGTH for header
-		// [0..1] 	: destination ID
-		// [2..3] 	: sender ID
-		// [4..5] 	: origin ID
-		// [6] 		: packet ID
-		// [7]		: hop counter
-		// [8]		: (reserved byte)
-		// [9]		: CRC-8
-		uint8_t headerMessage[MSG_HEADER_LENGTH];
-		Union_2B u2b;
-		u2b.u16 = destination;
-		headerMessage[0] = u2b.u8[0];
-		headerMessage[1] = u2b.u8[1];
-		u2b.u16 = base_id;
-		headerMessage[2] = u2b.u8[0];
-		headerMessage[3] = u2b.u8[1];
-		headerMessage[4] = u2b.u8[0];
-		headerMessage[5] = u2b.u8[1];
-		headerMessage[6] = xMeshSendPacketId++;
-		headerMessage[7] = HOP_COUNTER_MAX;
-		headerMessage[8] = headerMessage[9] = 0;
+		// next MSG_HEADER_LENGTH for header @MeshHeader_t
+		MeshHeader_t _h;
+		_h.destination_id = destination;
+		_h.origin_id = _h.sender_id = base_id;
+		_h.packet_id = xMeshSendPacketId++;
+		_h.message_type = MsgType_Standard;
+		_h.payload_len = txLen;
+		_h.hop_counter = HOP_COUNTER_MAX;
+		_h.crc8 = 0;
 
-		memset(msgFSKBuffer, 0, sizeof(msgFSKBuffer));
-		// first 2 byte sync, message type
-		msgFSKBuffer[0] = 'M';
-		msgFSKBuffer[1] = 'S';
-		memcpy(msgFSKBuffer + 2, txMessage, TX_MSG_LENGTH);
-		memcpy(msgFSKBuffer + MAX_RX_MSG_LENGTH, headerMessage, MSG_HEADER_LENGTH);
-		msgFSKBuffer[MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1] = headerMessage[9] = crc8_compute(
-				msgFSKBuffer, MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1);
+		memset(msgFSKBufferTx, 0, sizeof(msgFSKBufferTx));
+		memcpy(msgFSKBufferTx, &_h, MSG_HEADER_LENGTH);
+		memcpy(msgFSKBufferTx + MSG_HEADER_LENGTH, txMessage, txLen);
+		_h.crc8 = crc8_compute(msgFSKBufferTx, MSG_HEADER_LENGTH + _h.payload_len);
+		msgFSKBufferTx[MSG_HEADER_LENGTH - 1] = _h.crc8;
 
-		MSG_SendPacket();
+		MSG_SendPacket(MSG_HEADER_LENGTH + txLen);
 
 		moveUP(rxMessage);
-		sprintf(rxMessage[3], "> %s", txMessage);
+		snprintf(rxMessage[3], sizeof(rxMessage[3]), "> %s", txMessage);
 		memset(lastcMessage, 0, sizeof(lastcMessage));
-		memcpy(lastcMessage, txMessage, TX_MSG_LENGTH);
+		memcpy(lastcMessage, txMessage, sizeof(lastcMessage));
 		cIndex = 0;
 		prevKey = 0;
 		prevLetter = 0;
@@ -900,7 +918,7 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 
 	if (rx_sync) {
 		gFSKWriteIndex = 0;
-		memset(msgFSKBuffer, 0, sizeof(msgFSKBuffer));
+		memset(msgFSKBufferRx, 0, sizeof(msgFSKBufferRx));
 		msgStatus = RECEIVING;
 	}
 
@@ -909,10 +927,10 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 		const uint16_t count = BK4819_ReadRegister(BK4819_REG_5E) & (7u << 0);  // almost full threshold
 		for (uint16_t i = 0; i < count; i++) {
 			const uint16_t word = BK4819_ReadRegister(BK4819_REG_5F);
-			if (gFSKWriteIndex < sizeof(msgFSKBuffer))
-				msgFSKBuffer[gFSKWriteIndex++] = (word >> 0) & 0xFF;
-			if (gFSKWriteIndex < sizeof(msgFSKBuffer))
-				msgFSKBuffer[gFSKWriteIndex++] = (word >> 8) & 0xFF;
+			if (gFSKWriteIndex < sizeof(msgFSKBufferRx))
+				msgFSKBufferRx[gFSKWriteIndex++] = (word >> 0) & 0xFF;
+			if (gFSKWriteIndex < sizeof(msgFSKBufferRx))
+				msgFSKBufferRx[gFSKWriteIndex++] = (word >> 8) & 0xFF;
 		}
 
 		SYSTEM_DelayMs(10);
@@ -927,55 +945,66 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 		msgStatus = READY;
 
 		if (gFSKWriteIndex > 0) {
+			uint8_t add_buffer_ret = ABuffer_RET_ERROR;
+			uint8_t fsk_crc = 0, calc_crc = 0;
+			MeshHeader_t _h;
+			char *_payload = (char*) (msgFSKBufferRx + MSG_HEADER_LENGTH);
 
-			uint8_t crc_val = crc8_compute(msgFSKBuffer, MSG_HEADER_LENGTH + MAX_RX_MSG_LENGTH - 1);
+			if (gFSKWriteIndex > MSG_HEADER_LENGTH) {
 
-			if (msgFSKBuffer[0] == 'M' && msgFSKBuffer[1] == 'S') {
+				memcpy(&_h, msgFSKBufferRx, MSG_HEADER_LENGTH);
+				// save receive CRC byte, then zeroed it
+				fsk_crc = msgFSKBufferRx[MSG_HEADER_LENGTH - 1];
+				msgFSKBufferRx[MSG_HEADER_LENGTH - 1] = 0;
+				// calculate CRC
+				calc_crc= crc8_compute(msgFSKBufferRx, MSG_HEADER_LENGTH + _h.payload_len);
+				msgFSKBufferRx[MSG_HEADER_LENGTH - 1] = fsk_crc;
 
-				char _payload[TX_MSG_LENGTH];
-				MeshHeader_t _header;
-
-				memset(_payload, 0, TX_MSG_LENGTH);
-				snprintf(_payload, TX_MSG_LENGTH, "%s", &msgFSKBuffer[2]);
-				memcpy(&_header, &msgFSKBuffer[MAX_RX_MSG_LENGTH], MSG_HEADER_LENGTH);
-
-				// next MSG_HEADER_LENGTH for header
-				// [0..1] 	: destination ID
-				// [2..3] 	: sender ID
-				// [4..5] 	: origin ID
-				// [6] 		: packet ID
-				// [7]		: hop counter
-				// [8]		: (reserved byte)
-				// [9]		: CRC-8
-				UART_printf("header<%d,%d,%d,%d,%d,%d\n",
-						_header.destination_id,
-						_header.sender_id,
-						_header.origin_id,
-						_header.packet_id,
-						_header.hop_counter,
-						_header.crc8);
-
-				/* TODO CRC check */
-				if (crc_val == _header.crc8)
+				/* CRC check */
+				if (fsk_crc == calc_crc)
 					UART_printf("CRC<VALID\n");
 				else
 					UART_printf("CRC<MISMATCH\n");
 
-				if (XMESH_AddBuffer(_payload, _header)) {
+				// next MSG_HEADER_LENGTH for header, see @MeshHeader_t
+				UART_printf("header<x%02X,x%02X,x%02X,%d,%d,%d,%d,x%02X\n",
+						_h.destination_id,
+						_h.sender_id,
+						_h.origin_id,
+						_h.packet_id,
+						_h.message_type,
+						_h.payload_len,
+						_h.hop_counter,
+						_h.crc8);
+				UART_printf("payload<%s\n", msgFSKBufferRx + MSG_HEADER_LENGTH);
 
-					moveUP(rxMessage);
-					snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "< %s", &msgFSKBuffer[2]);
-					if (crc_val != _header.crc8)
-						rxMessage[3][0] = 'C';
+				add_buffer_ret = XMESH_AddBuffer(_payload, _h,
+						(fsk_crc == calc_crc) ? true : false);
+			}
 
-					#ifdef ENABLE_MESSENGER_UART
-					UART_printf("SMS%s\n", rxMessage[3]);
-					#endif
+			if (add_buffer_ret != ABuffer_RET_ERROR) {
+				moveUP(rxMessage);
+				if (_h.message_type == MsgType_Standard) {
+					snprintf(rxMessage[3], sizeof(rxMessage[3]), "< %s", _payload);
 				}
+				else if (_h.message_type == MsgType_Encrypted) {
+					snprintf(rxMessage[3], sizeof(rxMessage[3]), "< enc msg %dB from %d",
+							_h.payload_len, _h.sender_id);
+				}
+				if (calc_crc != fsk_crc)
+					rxMessage[3][0] = 'C';
+
+				#ifdef ENABLE_MESSENGER_UART
+				if (add_buffer_ret == ABuffer_RET_MSG_NEW)
+					UART_printf("SMS%s\n", rxMessage[3]);
+				#endif
 			}
 			else {
 				moveUP(rxMessage);
-				snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "? %s", &msgFSKBuffer[2]);
+				snprintf(rxMessage[3], sizeof(rxMessage[3]), "? unknown format");
+				#ifdef ENABLE_MESSENGER_UART
+				UART_printf("SMS%s\n", rxMessage[3]);
+				#endif
 			}
 
 			if ( gScreenToDisplay != DISPLAY_MSG ) {
@@ -994,7 +1023,7 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 		gFSKWriteIndex = 0;
 		#ifdef ENABLE_MESSENGER_DELIVERY_NOTIFICATION
 		// Transmit a message to the sender that we have received the message (Unless it's a service message)
-		if (msgFSKBuffer[0] == 'M' && msgFSKBuffer[1] == 'S' && msgFSKBuffer[2] != 0x1b) {
+		if (msgFSKBufferTx[0] == 'M' && msgFSKBufferTx[1] == 'S' && msgFSKBufferTx[2] != 0x1b) {
 			MSG_Send("\x1b\x1b\x1bRCVD", true);
 		}
 		#endif
@@ -1022,7 +1051,7 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 
 	if (rx_sync) {
 		gFSKWriteIndex = 0;
-		memset(msgFSKBuffer, 0, sizeof(msgFSKBuffer));
+		memset(msgFSKBufferTx, 0, sizeof(msgFSKBufferTx));
 		msgStatus = RECEIVING;
 	}
 
@@ -1031,10 +1060,10 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 		const uint16_t count = BK4819_ReadRegister(BK4819_REG_5E) & (7u << 0);  // almost full threshold
 		for (uint16_t i = 0; i < count; i++) {
 			const uint16_t word = BK4819_ReadRegister(BK4819_REG_5F);
-			if (gFSKWriteIndex < sizeof(msgFSKBuffer))
-				msgFSKBuffer[gFSKWriteIndex++] = validate_char((word >> 0) & 0xff);
-			if (gFSKWriteIndex < sizeof(msgFSKBuffer))
-				msgFSKBuffer[gFSKWriteIndex++] = validate_char((word >> 8) & 0xff);
+			if (gFSKWriteIndex < sizeof(msgFSKBufferTx))
+				msgFSKBufferTx[gFSKWriteIndex++] = validate_char((word >> 0) & 0xff);
+			if (gFSKWriteIndex < sizeof(msgFSKBufferTx))
+				msgFSKBufferTx[gFSKWriteIndex++] = validate_char((word >> 8) & 0xff);
 		}
 
 		SYSTEM_DelayMs(10);
@@ -1052,10 +1081,10 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 		if (gFSKWriteIndex > 2) {
 
 			// If there's three 0x1b bytes, then it's a service message
-			if (msgFSKBuffer[2] == 0x1b && msgFSKBuffer[3] == 0x1b && msgFSKBuffer[4] == 0x1b) {
+			if (msgFSKBufferTx[2] == 0x1b && msgFSKBufferTx[3] == 0x1b && msgFSKBufferTx[4] == 0x1b) {
 			#ifdef ENABLE_MESSENGER_DELIVERY_NOTIFICATION
 				// If the next 4 bytes are "RCVD", then it's a delivery notification
-				if (msgFSKBuffer[5] == 'R' && msgFSKBuffer[6] == 'C' && msgFSKBuffer[7] == 'V' && msgFSKBuffer[8] == 'D') {
+				if (msgFSKBufferTx[5] == 'R' && msgFSKBufferTx[6] == 'C' && msgFSKBufferTx[7] == 'V' && msgFSKBufferTx[8] == 'D') {
 					UART_printf("SVC<RCPT\n");
 					rxMessage[3][strlen(rxMessage[3])] = '+';
 					gUpdateStatus = true;
@@ -1064,12 +1093,12 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 			#endif
 			} else {
 				moveUP(rxMessage);
-				if (msgFSKBuffer[0] != 'M' || msgFSKBuffer[1] != 'S') {
+				if (msgFSKBufferTx[0] != 'M' || msgFSKBufferTx[1] != 'S') {
 					snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "? unknown msg format!");
 				}
 				else
 				{
-					snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "< %s", &msgFSKBuffer[2]);
+					snprintf(rxMessage[3], TX_MSG_LENGTH + 2, "< %s", &msgFSKBufferTx[2]);
 					#ifdef ENABLE_MESSENGER_UART
 					UART_printf("SMS%s\n", rxMessage[3]);
 					#endif
@@ -1096,7 +1125,7 @@ void MSG_StorePacket(const uint16_t interrupt_bits) {
 		gFSKWriteIndex = 0;
 		#ifdef ENABLE_MESSENGER_DELIVERY_NOTIFICATION		
 		// Transmit a message to the sender that we have received the message (Unless it's a service message)
-		if (msgFSKBuffer[0] == 'M' && msgFSKBuffer[1] == 'S' && msgFSKBuffer[2] != 0x1b) {
+		if (msgFSKBufferTx[0] == 'M' && msgFSKBufferTx[1] == 'S' && msgFSKBufferTx[2] != 0x1b) {
 			MSG_Send("\x1b\x1b\x1bRCVD", true);
 		}
 		#endif
@@ -1133,9 +1162,8 @@ void XMESH_INIT()
 		snprintf(_number, sizeof(_number), "%d", base_id);
 		MSG_SetId(_name, _number);
 	}
-	else {
-		UART_printf("net=%s:id=%d", _name, base_id);
-	}
+
+	UART_printf("net=%s:id=%d\n", _name, base_id);
 }
 
 void XMESH_TimeSlice500ms()
@@ -1160,7 +1188,7 @@ void XMESH_TimeSlice500ms()
 	while (index != xMeshIndexHead) {
 		if (xMeshBuffer[index].state.tx_time > 0) {
 			if (Systick_Get10msTick() >= xMeshBuffer[index].state.tx_time) {
-				/* TODO send current buffer */
+				/* send current buffer */
 				if(MSG_SendBuffer(index)){
 					xMeshBuffer[index].state.tx_time = 0;
 				}
@@ -1290,7 +1318,7 @@ void  MSG_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld) {
 				break;
 			case KEY_UP:
 				memset(cMessage, 0, sizeof(cMessage));
-				memcpy(cMessage, lastcMessage, TX_MSG_LENGTH);
+				memcpy(cMessage, lastcMessage, sizeof(lastcMessage));
 				cIndex = strlen(cMessage);
 				break;
 			/*case KEY_DOWN:
@@ -1298,7 +1326,7 @@ void  MSG_ProcessKeys(KEY_Code_t Key, bool bKeyPressed, bool bKeyHeld) {
 			case KEY_MENU:
 			case KEY_PTT:
 				// Send message
-				MSG_Send(cMessage, 0);
+				MSG_Send(cMessage, strlen(cMessage), 0);
 				break;
 			case KEY_EXIT:
 				gRequestDisplayScreen = DISPLAY_MAIN;

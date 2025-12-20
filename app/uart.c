@@ -146,36 +146,35 @@ bool UART_IsCommandAvailable(void)
 	static uint8_t waitDelay10msCounter = 0;
 	char _c[2] = { 0, 0 };
 
-	while (1) {
-		if (uart_rx_index == DmaIndex)
-			return false;
-
-		waitDelay10msCounter++;
-
-		if (waitDelay10msCounter > 2) {
-			waitDelay10msCounter = 0;
-
-//			UART_printf("index=%d,%d,%d\n", DmaIndex, uart_rx_index,
-//					(DmaIndex > uart_rx_index) ?
-//							(int)(DmaIndex - uart_rx_index) :
-//							(int)(DmaIndex + sizeof(UART_DMA_Buffer) - uart_rx_index));
-			memset(gCmdMessage, 0, sizeof(gCmdMessage));
-			while (uart_rx_index != DmaIndex) {
-				if ((UART_DMA_Buffer[uart_rx_index] == '\r')
-						|| (UART_DMA_Buffer[uart_rx_index] == '\n')
-						|| (UART_DMA_Buffer[uart_rx_index] == '\0')) {
-
-					uart_rx_index = DmaIndex;
-					return true;
-				}
-				_c[0] = UART_DMA_Buffer[uart_rx_index];
-				strcat(gCmdMessage, _c);
-				uart_rx_index = DMA_INDEX(uart_rx_index, 1);
-			}
-		}
-
-		break;
+	if (uart_rx_index == DmaIndex) {
+		waitDelay10msCounter = 0;
+		return false;
 	}
+
+	waitDelay10msCounter++;
+
+	if (waitDelay10msCounter > 10) {
+		waitDelay10msCounter = 0;
+
+//		UART_printf("index=%d,%d,%d\n", uart_rx_index, DmaIndex,
+//				(DmaIndex > uart_rx_index) ?
+//						(int) (DmaIndex - uart_rx_index) :
+//						(int) (DmaIndex + sizeof(UART_DMA_Buffer) - uart_rx_index));
+		memset(gCmdMessage, 0, sizeof(gCmdMessage));
+		while (uart_rx_index != DmaIndex) {
+			if ((UART_DMA_Buffer[uart_rx_index] == '\r')
+					|| (UART_DMA_Buffer[uart_rx_index] == '\n')
+					|| (UART_DMA_Buffer[uart_rx_index] == '\0')) {
+
+				uart_rx_index = DmaIndex;
+				return true;
+			}
+			_c[0] = UART_DMA_Buffer[uart_rx_index];
+			strcat(gCmdMessage, _c);
+			uart_rx_index = DMA_INDEX(uart_rx_index, 1);
+		}
+	}
+
 	return false;
 }
 
@@ -191,11 +190,14 @@ void UART_HandleCommand(void)
 		char *payload = tmp;
 		char dest_id[8] = { 0 };
 		uint8_t comma_pos = 0;
-		uint16_t dID=0;
+		uint16_t dID = 0;
 		bool comma_found = false;
 		char c[2] = {0,0};
 
 		for ( comma_pos = 0; comma_pos < strlen(tmp); comma_pos++ ) {
+			// comma_pos exceed dest_id length
+			if (comma_pos >= 8)
+				break;
 			c[0] = *(tmp + comma_pos);
 			if (c[0] == ',') {
 				comma_found = true;
@@ -214,7 +216,7 @@ void UART_HandleCommand(void)
 //		UART_printf("%s=%d,%s\n", tmp, dID, payload);
 
 		if (strlen(payload) > 0) {
-			if (!MSG_Send(payload, dID)) {
+			if (!MSG_Send(payload, strlen(payload), dID)) {
 				UART_printf("in RX state!\n");
 			}
 			UART_printf("SMS>%s\r\n", payload);

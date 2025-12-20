@@ -67,7 +67,7 @@ ENABLE_SCREEN_DUMP			  ?= 0
 
 #------------------------------------------------------------------------------
 AUTHOR_STRING ?= KURRO
-VERSION_STRING ?= V0.3.7
+VERSION_STRING ?= V0.3.8
 PROJECT_NAME := cfw_kurro_oefw_$(VERSION_STRING)
 
 BUILD := _build
